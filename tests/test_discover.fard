@@ -1,0 +1,108 @@
+import("std/rec") as rec
+import("std/list") as list
+import("std/str") as str
+import("../src/kernel/kernel") as eos
+import("../src/anka/discover") as discover
+
+let k1 = eos.new("discover-node-1")
+let k2 = eos.new("discover-node-2")
+let k3 = eos.new("discover-node-3")
+
+fn make_signed(k, address, institution, region, capabilities, claim_spaces) {
+  let entry = discover.make_entry(
+    k.keypair.node_id, k.keypair.public_key_hex,
+    address, institution, region, capabilities, claim_spaces
+  ) in
+  discover.sign_entry(entry, k.keypair.private_key_hex)
+}
+
+let fda_node = make_signed(k1, "http://fda-node:7600", "FDA", "US",
+  ["publish", "witness", "gate_eval"],
+  ["FDA.US.2025"])
+
+let azim_node = make_signed(k2, "http://azim-node:7600", "Azim", "US",
+  ["publish", "training_receipt"],
+  ["AZIM.TRAIN.v1"])
+
+let multi_node = make_signed(k3, "http://multi-node:7600", "MultiInst", "EU",
+  ["publish", "witness", "gate_eval", "training_receipt"],
+  ["FDA.US.2025", "AZIM.TRAIN.v1", "EMA.EU.2025"])
+
+test "entry sign and verify passes" {
+  discover.verify_entry(fda_node).valid == true
+}
+
+test "entry verify fails for tampered address" {
+  let bad = {...fda_node, address: "http://evil:9999"} in
+  discover.verify_entry(bad).valid == false
+}
+
+test "has_capability true for present capability" {
+  discover.has_capability(fda_node, "gate_eval") == true
+}
+
+test "has_capability false for absent capability" {
+  discover.has_capability(fda_node, "training_receipt") == false
+}
+
+test "has_claim_space true for present space" {
+  discover.has_claim_space(azim_node, "AZIM.TRAIN.v1") == true
+}
+
+test "has_claim_space false for absent space" {
+  discover.has_claim_space(azim_node, "FDA.US.2025") == false
+}
+
+test "cache stores and retrieves by capability" {
+  let cache = discover.new_cache() in
+  let cache = discover.cache_entry(cache, fda_node) in
+  let cache = discover.cache_entry(cache, azim_node) in
+  let results = discover.lookup(cache, "gate_eval") in
+  list.len(results) == 1 && list.head(results).institution == "FDA"
+}
+
+test "cache lookup_claim_space finds correct nodes" {
+  let cache = discover.new_cache() in
+  let cache = discover.cache_entry(cache, fda_node) in
+  let cache = discover.cache_entry(cache, azim_node) in
+  let cache = discover.cache_entry(cache, multi_node) in
+  let results = discover.lookup_claim_space(cache, "FDA.US.2025") in
+  list.len(results) == 2
+}
+
+test "cache lookup_node finds by node_id" {
+  let cache = discover.new_cache() in
+  let cache = discover.cache_entry(cache, fda_node) in
+  let found = discover.lookup_node(cache, fda_node.node_id) in
+  found != null && found.institution == "FDA"
+}
+
+test "cache lookup_node returns null for unknown node" {
+  let cache = discover.new_cache() in
+  discover.lookup_node(cache, "ed25519:unknown") == null
+}
+
+test "cache upsert replaces existing entry for same node" {
+  let cache = discover.new_cache() in
+  let cache = discover.cache_entry(cache, fda_node) in
+  let updated = {...fda_node, score: 99} in
+  let cache = discover.cache_entry(cache, updated) in
+  let results = discover.lookup(cache, "gate_eval") in
+  list.len(results) == 1 && list.head(results).score == 99
+}
+
+test "multi-capability node appears in multiple lookups" {
+  let cache = discover.new_cache() in
+  let cache = discover.cache_entry(cache, multi_node) in
+  let gate = discover.lookup(cache, "gate_eval") in
+  let training = discover.lookup(cache, "training_receipt") in
+  list.len(gate) == 1 && list.len(training) == 1
+}
+
+test "node_id starts with ed25519:" {
+  str.starts_with(fda_node.node_id, "ed25519:")
+}
+
+test "digest_hex starts with sha256:" {
+  str.starts_with(fda_node.digest_hex, "sha256:")
+}

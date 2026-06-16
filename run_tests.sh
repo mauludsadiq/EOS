@@ -34,6 +34,7 @@ run_test tests/test_policy_compile.fard
 run_test tests/test_fda_policy.fard
 run_test tests/test_witnessd.fard
 run_test tests/test_challenge.fard
+run_test tests/test_discover.fard
 
 echo ""
 echo "========================="

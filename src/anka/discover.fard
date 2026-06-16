@@ -1,0 +1,212 @@
+import("std/http") as http
+import("std/json") as json
+import("std/str") as str
+import("std/list") as list
+import("std/rec") as rec
+import("../kernel/canonical") as canon
+import("../kernel/keypair") as keypair
+
+// anka/discover.fard — capability discovery for EOS nodes
+//
+// Allows EOS nodes to find Anka agents by capability without hardcoded URLs.
+// Layered on top of Anka's registry and discovery HTTP API.
+//
+// REGISTRATION:
+//   register(client, entry) — register an EOS node's capabilities with Anka
+//
+// DISCOVERY:
+//   by_capability(client, capability) — find all agents offering a capability
+//   by_institution(client, institution) — find all agents at an institution
+//   best(client, capability, region) — find highest-scored agent for capability
+//
+// LOCAL CACHE:
+//   new_cache() — empty local capability cache
+//   cache_entry(cache, entry) — store a discovered entry locally
+//   lookup(cache, capability) — search local cache before hitting network
+//   refresh(cache, client, capability) — refresh cache from Anka node
+
+// --- Entry schema ---
+// A capability entry describes what an EOS/Anka node can do:
+// {
+//   node_id, public_key_hex, address,
+//   institution, region,
+//   capabilities: ["publish", "witness", "gate_eval", "training_receipt", ...],
+//   claim_spaces: ["FDA.US.2025", "AZIM.TRAIN.v1", ...],
+//   score: int,   // witness reputation score from Anka
+//   digest_hex, signature_hex
+// }
+
+fn make_entry(node_id, public_key_hex, address, institution, region, capabilities, claim_spaces) {
+  {
+    node_id: node_id,
+    public_key_hex: public_key_hex,
+    address: address,
+    institution: institution,
+    region: region,
+    capabilities: capabilities,
+    claim_spaces: claim_spaces,
+    score: 0
+  }
+}
+
+fn sign_entry(entry, private_key_hex) {
+  let digest_hex = canon.digest_obj({
+    node_id: entry.node_id,
+    public_key_hex: entry.public_key_hex,
+    address: entry.address,
+    institution: entry.institution,
+    region: entry.region,
+    capabilities: entry.capabilities,
+    claim_spaces: entry.claim_spaces
+  }) in
+  let raw = canon.strip_prefix(digest_hex) in
+  let sig = keypair.sign(private_key_hex, raw) in
+  {...entry, digest_hex: digest_hex, signature_hex: sig}
+}
+
+fn verify_entry(entry) {
+  let schema_ok =
+    rec.has(entry, "node_id") &&
+    rec.has(entry, "public_key_hex") &&
+    rec.has(entry, "address") &&
+    rec.has(entry, "digest_hex") &&
+    rec.has(entry, "signature_hex") &&
+    str.starts_with(entry.node_id, "ed25519:") &&
+    str.starts_with(entry.digest_hex, "sha256:") in
+  let expected = if schema_ok then canon.digest_obj({
+    node_id: entry.node_id,
+    public_key_hex: entry.public_key_hex,
+    address: entry.address,
+    institution: entry.institution,
+    region: entry.region,
+    capabilities: entry.capabilities,
+    claim_spaces: entry.claim_spaces
+  }) else "sha256:invalid" in
+  let digest_ok = schema_ok && expected == entry.digest_hex in
+  let raw = canon.strip_prefix(entry.digest_hex) in
+  let sig_ok = if digest_ok
+    then keypair.verify(entry.public_key_hex, raw, entry.signature_hex)
+    else false in
+  { valid: schema_ok && digest_ok && sig_ok, schema_ok: schema_ok, digest_ok: digest_ok, signature_ok: sig_ok }
+}
+
+fn has_capability(entry, capability) {
+  list.any(entry.capabilities, fn(c) { c == capability })
+}
+
+fn has_claim_space(entry, claim_space) {
+  list.any(entry.claim_spaces, fn(s) { s == claim_space })
+}
+
+// --- HTTP client helpers ---
+
+fn get(c, path) {
+  let result = http.get(str.concat([c.base_url, path])) in
+  if result.status == 200 then { ok: true, data: json.decode(result.body) }
+  else { ok: false, reason: result.body, status: result.status }
+}
+
+fn post(c, path, body) {
+  let result = http.post(str.concat([c.base_url, path]), json.encode(body)) in
+  if result.status == 200 then { ok: true, data: json.decode(result.body) }
+  else { ok: false, reason: result.body, status: result.status }
+}
+
+// --- Registration ---
+
+fn register(c, signed_entry) {
+  post(c, "/register", signed_entry)
+}
+
+fn register_node(c, k, address, institution, region, capabilities, claim_spaces) {
+  let entry = make_entry(
+    k.keypair.node_id, k.keypair.public_key_hex,
+    address, institution, region, capabilities, claim_spaces
+  ) in
+  let signed = sign_entry(entry, k.keypair.private_key_hex) in
+  let result = register(c, signed) in
+  { entry: signed, result: result }
+}
+
+// --- Discovery ---
+
+fn by_capability(c, capability) {
+  get(c, str.concat(["/discover/", capability]))
+}
+
+fn by_institution(c, institution) {
+  get(c, str.concat(["/discover/institution/", institution]))
+}
+
+fn by_claim_space(c, claim_space) {
+  get(c, str.concat(["/discover/claim_space/", claim_space]))
+}
+
+fn best(c, capability, region) {
+  let result = by_capability(c, capability) in
+  if !result.ok then result
+  else
+    let entries = rec.getOr(result.data, "entries", []) in
+    let in_region = if region == null then entries
+      else list.filter(entries, fn(e) { rec.getOr(e, "region", "") == region }) in
+    let sorted = list.sort_by_int_key(in_region, fn(e) { -(rec.getOr(e, "score", 0)) }) in
+    let top = list.head(sorted) in
+    if top == null then { ok: false, reason: "no agents found" }
+    else { ok: true, entry: top }
+}
+
+fn all_for_claim_space(c, claim_space) {
+  let result = by_claim_space(c, claim_space) in
+  if !result.ok then []
+  else rec.getOr(result.data, "entries", [])
+}
+
+// --- Local cache ---
+
+fn new_cache() {
+  { by_capability: {}, by_node_id: {}, by_claim_space: {} }
+}
+
+fn cache_entry(cache, entry) {
+  let node_cache = rec.set(cache.by_node_id, entry.node_id, entry) in
+  let cap_cache = list.fold(entry.capabilities, cache.by_capability, fn(acc, cap) {
+    let existing = rec.getOr(acc, cap, []) in
+    let without = list.filter(existing, fn(e) { e.node_id != entry.node_id }) in
+    rec.set(acc, cap, list.append(without, entry))
+  }) in
+  let space_cache = list.fold(entry.claim_spaces, cache.by_claim_space, fn(acc, space) {
+    let existing = rec.getOr(acc, space, []) in
+    let without = list.filter(existing, fn(e) { e.node_id != entry.node_id }) in
+    rec.set(acc, space, list.append(without, entry))
+  }) in
+  { by_capability: cap_cache, by_node_id: node_cache, by_claim_space: space_cache }
+}
+
+fn lookup(cache, capability) {
+  rec.getOr(cache.by_capability, capability, [])
+}
+
+fn lookup_claim_space(cache, claim_space) {
+  rec.getOr(cache.by_claim_space, claim_space, [])
+}
+
+fn lookup_node(cache, node_id) {
+  rec.getOr(cache.by_node_id, node_id, null)
+}
+
+fn refresh(cache, c, capability) {
+  let result = by_capability(c, capability) in
+  if !result.ok then { cache: cache, ok: false, reason: result.reason }
+  else
+    let entries = rec.getOr(result.data, "entries", []) in
+    let valid = list.filter(entries, fn(e) { verify_entry(e).valid }) in
+    let updated = list.fold(valid, cache, fn(acc, e) { cache_entry(acc, e) }) in
+    { cache: updated, ok: true, count: list.len(valid) }
+}
+
+export {
+  make_entry, sign_entry, verify_entry, has_capability, has_claim_space,
+  register, register_node,
+  by_capability, by_institution, by_claim_space, best, all_for_claim_space,
+  new_cache, cache_entry, lookup, lookup_claim_space, lookup_node, refresh
+}
