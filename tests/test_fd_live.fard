@@ -1,0 +1,122 @@
+import("std/io") as io
+import("std/json") as json
+import("std/list") as list
+import("std/rec") as rec
+import("std/str") as str
+import("../src/kernel/kernel") as eos
+import("../src/kernel/claim") as claim
+import("../src/fard_dinar/claim") as fd_claim
+import("../src/fard_dinar/policy") as fd_policy
+import("../src/fard_dinar/jurisdictions") as jur
+import("../src/anka/bridge") as anka
+import("../src/anka/witness_bridge") as witness_bridge
+import("/Users/g.bogans/Downloads/Fard Dinar/fard/lib/engine") as fd_engine
+import("/Users/g.bogans/Downloads/Fard Dinar/fard/lib/receipt") as fd_receipt
+import("/Users/g.bogans/Downloads/Fard Dinar/fard/lib/hashes") as fd_hashes
+
+let FD_BASE     = "/Users/g.bogans/Downloads/Fard Dinar"
+let OBJECTS_DIR = str.concat([FD_BASE, "/examples/objects"])
+let GENESIS     = str.concat([FD_BASE, "/examples/genesis_rewards.json"])
+let EVENTS      = str.concat([FD_BASE, "/examples/events.json"])
+
+let k = eos.new("fd-live-test-node")
+let anka_client = anka.client("http://localhost:18080")
+
+let genesis_cfg = json.decode(io.read_file(GENESIS).ok)
+let genesis_state = {
+  accounts:               genesis_cfg.accounts,
+  consumed_deposits:      genesis_cfg.consumed_deposits,
+  merchant_registry_hash: genesis_cfg.merchant_registry_hash,
+  oracle_set_hash:        genesis_cfg.oracle_set_hash,
+  reward_config:          genesis_cfg.reward_config,
+}
+let raw_events = json.decode(io.read_file(EVENTS).ok)
+let canonical_events = fd_engine.canonical_event_set(raw_events)
+let prog_hash = fd_hashes.hash_str_bytes("fard-engine-v1")
+
+fn event_timestamp(event) {
+  rec.getOr(event, "timestamp", 1710000000)
+}
+
+let engine_result = list.fold(canonical_events, { state: genesis_state, receipts: [], envelopes: [] }, fn(acc, event) {
+  let result = fd_engine.apply_event(OBJECTS_DIR, acc.state, event) in
+  if rec.has(result, "err") then acc
+  else
+    let rcpt = fd_receipt.build_receipt(prog_hash, event, acc.state, result.ok) in
+    let envelope = fd_claim.receipt_to_envelope(k, event, rcpt, event_timestamp(event)) in
+    {
+      state: result.ok,
+      receipts: list.append(acc.receipts, rcpt),
+      envelopes: list.append(acc.envelopes, envelope)
+    }
+})
+
+test "FD engine processes all canonical events" {
+  list.len(engine_result.receipts) == list.len(canonical_events)
+}
+
+test "FD engine produces correct supply" {
+  let balances = list.map(rec.values(engine_result.state.accounts), fn(a) { a.balance }) in
+  let supply = list.fold(balances, 0, fn(acc, b) { acc + b }) in
+  supply == 100012500
+}
+
+test "all receipts have ahd1024 run_id" {
+  list.all(engine_result.receipts, fn(r) { str.starts_with(r.run_id, "ahd1024:") })
+}
+
+test "all envelopes have sha256 digest" {
+  list.all(engine_result.envelopes, fn(e) { str.starts_with(e.digest_hex, "sha256:") })
+}
+
+test "all envelopes verify with issuer key" {
+  list.all(engine_result.envelopes, fn(e) {
+    claim.verify(e, k.keypair.public_key_hex).accepted
+  })
+}
+
+test "transfer envelopes have FARD_DINAR.TX.v1 claim space" {
+  let tx_envs = list.filter(engine_result.envelopes, fn(e) { e.claim.predicate == "transfer" }) in
+  list.all(tx_envs, fn(e) { e.claim.claim_space == jur.FARD_DINAR_TX_V1 })
+}
+
+test "deposit envelopes have FARD_DINAR.DEPOSIT.v1 claim space" {
+  let dep_envs = list.filter(engine_result.envelopes, fn(e) { e.claim.predicate == "deposit" }) in
+  list.all(dep_envs, fn(e) { e.claim.claim_space == jur.FARD_DINAR_DEPOSIT_V1 })
+}
+
+test "all envelopes pass open_policy gate" {
+  list.all(engine_result.envelopes, fn(e) {
+    fd_policy.eval_open(e.claim).ok == true
+  })
+}
+
+test "publish all FD receipts to Anka succeeds" {
+  let results = list.map(engine_result.envelopes, fn(e) {
+    anka.publish_envelope(anka_client, e)
+  }) in
+  list.all(results, fn(r) { r.ok == true })
+}
+
+test "submit structural witness for each published claim" {
+  let results = list.map(engine_result.envelopes, fn(e) {
+    witness_bridge.submit_structural(anka_client, k, e.digest_hex, 1710000000)
+  }) in
+  list.all(results, fn(r) { r.ok == true })
+}
+
+test "audit trail retrievable for first published claim" {
+  let first = list.head(engine_result.envelopes) in
+  let trail = anka.audit_trail(anka_client, first.digest_hex) in
+  trail.ok == true
+}
+
+test "state snapshot publishes to Anka" {
+  let supply = list.fold(
+    list.map(rec.values(engine_result.state.accounts), fn(a) { a.balance }),
+    0, fn(acc, b) { acc + b }
+  ) in
+  let state_hash = fd_hashes.hash_str_bytes(str.from(supply)) in
+  let env = fd_claim.state_snapshot_to_envelope(k, state_hash, list.len(canonical_events), 1710000000) in
+  anka.publish_envelope(anka_client, env).ok == true
+}

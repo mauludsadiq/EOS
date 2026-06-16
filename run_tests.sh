@@ -40,6 +40,7 @@ run_test tests/test_telemetryd.fard
 run_test tests/test_anka_live.fard
 run_test tests/test_fd_claim.fard
 run_test tests/test_fd_policy.fard
+run_test tests/test_fd_live.fard
 
 echo ""
 echo "========================="
