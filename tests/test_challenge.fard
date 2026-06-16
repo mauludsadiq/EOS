@@ -1,0 +1,74 @@
+import("std/rec") as rec
+import("std/str") as str
+import("../src/kernel/challenge") as challenge
+import("../src/kernel/keypair") as keypair
+import("../src/kernel/kernel") as eos
+
+let challenger = keypair.generate("challenger-seed")
+let target = keypair.generate("target-seed")
+let k_challenger = eos.new("challenger-seed")
+let k_target = eos.new("target-seed")
+
+test "nonce is schema valid" {
+  let nonce = challenge.make_nonce(challenger.node_id, target.node_id, 1700000000) in
+  challenge.schema_valid_nonce(nonce) == true
+}
+
+test "nonce digest starts with sha256:" {
+  let nonce = challenge.make_nonce(challenger.node_id, target.node_id, 1700000000) in
+  str.starts_with(nonce.nonce_digest, "sha256:")
+}
+
+test "proof of possession: target responds and challenger verifies" {
+  let nonce = challenge.make_nonce(challenger.node_id, target.node_id, 1700000000) in
+  let response = challenge.respond(nonce, target.private_key_hex) in
+  challenge.verify_response(nonce, response, target.public_key_hex) == true
+}
+
+test "proof of possession: wrong key fails verification" {
+  let nonce = challenge.make_nonce(challenger.node_id, target.node_id, 1700000000) in
+  let response = challenge.respond(nonce, target.private_key_hex) in
+  challenge.verify_response(nonce, response, challenger.public_key_hex) == false
+}
+
+test "proof of possession: tampered nonce_digest fails" {
+  let nonce = challenge.make_nonce(challenger.node_id, target.node_id, 1700000000) in
+  let response = challenge.respond(nonce, target.private_key_hex) in
+  let bad_nonce = {...nonce, nonce_digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"} in
+  challenge.verify_response(bad_nonce, response, target.public_key_hex) == false
+}
+
+test "response is schema valid" {
+  let nonce = challenge.make_nonce(challenger.node_id, target.node_id, 1700000000) in
+  let response = challenge.respond(nonce, target.private_key_hex) in
+  challenge.schema_valid_response(response) == true
+}
+
+test "claim challenge: make and verify" {
+  let target_digest = "sha256:abc123def456" in
+  let c = challenge.make_claim_challenge(
+    target_digest, challenger.node_id, "data_error",
+    "loss curve inverted at step 29600",
+    1700000000, challenger.private_key_hex
+  ) in
+  challenge.verify_claim_challenge(c, challenger.public_key_hex) == true
+}
+
+test "claim challenge: wrong key fails" {
+  let c = challenge.make_claim_challenge(
+    "sha256:abc123", challenger.node_id, "data_error", "evidence",
+    1700000000, challenger.private_key_hex
+  ) in
+  challenge.verify_claim_challenge(c, target.public_key_hex) == false
+}
+
+test "kernel issue and respond to challenge round-trip" {
+  let nonce = eos.issue_challenge(k_challenger, k_target.keypair.node_id, 1700000000) in
+  let response = eos.respond_to_challenge(k_target, nonce) in
+  eos.verify_challenge_response(nonce, response, k_target.keypair.public_key_hex) == true
+}
+
+test "kernel contest_claim and verify_contest round-trip" {
+  let c = eos.contest_claim(k_challenger, "sha256:deadbeef", "data_error", "evidence text", 1700000000) in
+  eos.verify_contest(c, k_challenger.keypair.public_key_hex) == true
+}

@@ -4,12 +4,9 @@ import("gate") as gate
 import("witness") as witness
 import("gossip") as gossip
 import("keypair") as keypair
+import("challenge") as challenge
 
-// kernel.fard — assembles all six primitives into one record
-// Usage:
-//   import("kernel") as eos
-//   let k = eos.new("my-node-seed") in
-//   let r = eos.write_blob(k, bytes) in
+// kernel.fard — assembles all seven primitives into one record
 
 fn new(node_seed) {
   let kp = keypair.generate(node_seed) in
@@ -20,8 +17,8 @@ fn new(node_seed) {
   }
 }
 
-fn write_blob(k, bytes) {
-  let r = k1.write(k.k1, bytes) in
+fn write_blob(k, data) {
+  let r = k1.write(k.k1, data) in
   { kernel: {...k, k1: r.store}, digest: r.digest }
 }
 
@@ -30,9 +27,10 @@ fn read_blob(k, digest_hex) {
 }
 
 fn mint_claim(k, claim_space, subject, predicate, object, evidence_refs, timestamp_unix_secs) {
-  let c = claim.make(claim_space, subject, predicate, object, evidence_refs, k.keypair.node_id, timestamp_unix_secs) in
-  let envelope = claim.sign(c, k.keypair.private_key_hex) in
-  envelope
+  claim.sign(
+    claim.make(claim_space, subject, predicate, object, evidence_refs, k.keypair.node_id, timestamp_unix_secs),
+    k.keypair.private_key_hex
+  )
 }
 
 fn verify_claim(k, envelope, public_key_hex) {
@@ -57,4 +55,34 @@ fn sub_gossip(k, topic) {
   { kernel: {...k, gossip: r.store}, msgs: r.msgs }
 }
 
-export { new, write_blob, read_blob, mint_claim, verify_claim, eval_gate, build_witness, pub_gossip, sub_gossip }
+// Challenge: proof of possession
+fn issue_challenge(k, target_node_id, timestamp_unix_secs) {
+  challenge.make_nonce(k.keypair.node_id, target_node_id, timestamp_unix_secs)
+}
+
+fn respond_to_challenge(k, nonce) {
+  challenge.respond(nonce, k.keypair.private_key_hex)
+}
+
+fn verify_challenge_response(nonce, response, target_public_key_hex) {
+  challenge.verify_response(nonce, response, target_public_key_hex)
+}
+
+// Challenge: contest a claim
+fn contest_claim(k, target_digest_hex, kind, evidence, timestamp_unix_secs) {
+  challenge.make_claim_challenge(
+    target_digest_hex, k.keypair.node_id, kind, evidence,
+    timestamp_unix_secs, k.keypair.private_key_hex
+  )
+}
+
+fn verify_contest(c, challenger_public_key_hex) {
+  challenge.verify_claim_challenge(c, challenger_public_key_hex)
+}
+
+export {
+  new, write_blob, read_blob, mint_claim, verify_claim, eval_gate,
+  build_witness, pub_gossip, sub_gossip,
+  issue_challenge, respond_to_challenge, verify_challenge_response,
+  contest_claim, verify_contest
+}

@@ -33,6 +33,7 @@ run_test tests/test_azim_bridge.fard
 run_test tests/test_policy_compile.fard
 run_test tests/test_fda_policy.fard
 run_test tests/test_witnessd.fard
+run_test tests/test_challenge.fard
 
 echo ""
 echo "========================="

@@ -1,0 +1,116 @@
+import("std/json") as json
+import("std/rec") as rec
+import("std/type") as type
+import("canonical") as canon
+import("keypair") as keypair
+
+// challenge.fard — two challenge patterns:
+//
+// 1) PROOF OF POSSESSION — node identity challenge
+//    Challenger sends a nonce digest to a node.
+//    Node must sign it with its private key to prove possession.
+//    Verifier checks the signature against the node's known public key.
+//
+//    make_nonce(challenger_node_id, target_node_id, timestamp) -> nonce record
+//    respond(nonce, private_key_hex) -> response record
+//    verify_response(nonce, response, target_public_key_hex) -> bool
+//
+// 2) CLAIM CHALLENGE — contest an epistemic claim (mirrors Anka)
+//    Challenger disputes a published claim with evidence.
+//    Challenge is signed by the challenger's keypair.
+//
+//    make_claim_challenge(target_digest_hex, challenger_node_id, kind, evidence, timestamp, secret) -> challenge
+//    verify_claim_challenge(challenge, challenger_public_key_hex) -> bool
+
+// --- Proof of possession ---
+
+fn make_nonce(challenger_node_id, target_node_id, timestamp_unix_secs) {
+  let body = json.canonicalize({
+    challenger_node_id: challenger_node_id,
+    target_node_id: target_node_id,
+    timestamp_unix_secs: timestamp_unix_secs
+  }) in
+  let nonce_digest = canon.digest_text(body) in
+  {
+    challenger_node_id: challenger_node_id,
+    target_node_id: target_node_id,
+    timestamp_unix_secs: timestamp_unix_secs,
+    nonce_digest: nonce_digest
+  }
+}
+
+fn respond(nonce, private_key_hex) {
+  let raw = canon.strip_prefix(nonce.nonce_digest) in
+  let sig = keypair.sign(private_key_hex, raw) in
+  {
+    nonce_digest: nonce.nonce_digest,
+    target_node_id: nonce.target_node_id,
+    response_signature_hex: sig
+  }
+}
+
+fn verify_response(nonce, response, target_public_key_hex) {
+  let nonce_matches = response.nonce_digest == nonce.nonce_digest in
+  let node_matches = response.target_node_id == nonce.target_node_id in
+  let raw = canon.strip_prefix(nonce.nonce_digest) in
+  let sig_ok = keypair.verify(target_public_key_hex, raw, response.response_signature_hex) in
+  nonce_matches && node_matches && sig_ok
+}
+
+fn schema_valid_nonce(n) {
+  type.of(n.challenger_node_id) == "text" &&
+  type.of(n.target_node_id) == "text" &&
+  type.of(n.timestamp_unix_secs) == "int" &&
+  type.of(n.nonce_digest) == "text"
+}
+
+fn schema_valid_response(r) {
+  type.of(r.nonce_digest) == "text" &&
+  type.of(r.target_node_id) == "text" &&
+  type.of(r.response_signature_hex) == "text"
+}
+
+// --- Claim challenge (mirrors Anka challenge.fard) ---
+
+fn challenge_body(target_digest_hex, challenger_node_id, kind, evidence, timestamp_unix_secs) {
+  json.canonicalize({
+    target_digest_hex: target_digest_hex,
+    challenger_node_id: challenger_node_id,
+    kind: kind,
+    evidence: evidence,
+    timestamp_unix_secs: timestamp_unix_secs
+  })
+}
+
+fn make_claim_challenge(target_digest_hex, challenger_node_id, kind, evidence, timestamp_unix_secs, challenger_secret) {
+  let body_digest = canon.digest_text(
+    challenge_body(target_digest_hex, challenger_node_id, kind, evidence, timestamp_unix_secs)
+  ) in
+  let raw = canon.strip_prefix(body_digest) in
+  {
+    target_digest_hex: target_digest_hex,
+    challenger_node_id: challenger_node_id,
+    kind: kind,
+    evidence: evidence,
+    timestamp_unix_secs: timestamp_unix_secs,
+    body_digest: body_digest,
+    signature_hex: keypair.sign(challenger_secret, raw)
+  }
+}
+
+fn verify_claim_challenge(c, challenger_public_key_hex) {
+  let body_digest = canon.digest_text(
+    challenge_body(c.target_digest_hex, c.challenger_node_id, c.kind, c.evidence, c.timestamp_unix_secs)
+  ) in
+  let digest_ok = body_digest == c.body_digest in
+  let raw = canon.strip_prefix(body_digest) in
+  let sig_ok = if digest_ok
+    then keypair.verify(challenger_public_key_hex, raw, c.signature_hex)
+    else false in
+  digest_ok && sig_ok
+}
+
+export {
+  make_nonce, respond, verify_response, schema_valid_nonce, schema_valid_response,
+  make_claim_challenge, verify_claim_challenge, challenge_body
+}
