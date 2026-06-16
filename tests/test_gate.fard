@@ -1,0 +1,57 @@
+import("std/list") as list
+import("std/rec") as rec
+import("../src/kernel/gate") as gate
+
+let fda_claim = {
+  claim_space: "FDA.US.2025",
+  subject: "drug:aspirin",
+  predicate: "approved",
+  object: "true",
+  evidence_refs: [],
+  issuer_node_id: "ed25519:abc",
+  timestamp_unix_secs: 1700000000
+}
+
+test "gate RepMin passes with sufficient reputation" {
+  let ctx = { reputation: 42, now: 1702000000, policy: { rules: [{op: "RepMin", val: 10}] } } in
+  gate.eval_with_ctx_json(fda_claim, ctx).ok == true
+}
+
+test "gate RepMin fails with insufficient reputation" {
+  let ctx = { reputation: 5, now: 1702000000, policy: { rules: [{op: "RepMin", val: 10}] } } in
+  rec.has(gate.eval_with_ctx_json(fda_claim, ctx), "err")
+}
+
+test "gate JurAllow passes for matching jurisdiction" {
+  let ctx = { reputation: 0, now: 1702000000, policy: { rules: [{op: "JurAllow", list: ["FDA.US.2025"]}] } } in
+  gate.eval_with_ctx_json(fda_claim, ctx).ok == true
+}
+
+test "gate JurAllow fails for wrong jurisdiction" {
+  let ctx = { reputation: 0, now: 1702000000, policy: { rules: [{op: "JurAllow", list: ["EMA.EU.2025"]}] } } in
+  rec.has(gate.eval_with_ctx_json(fda_claim, ctx), "err")
+}
+
+test "gate Glb conjunction of three passes" {
+  let ctx = {
+    reputation: 42,
+    now: 1702000000,
+    policy: { rules: [
+      {op: "RepMin", val: 10},
+      {op: "AgeMax", seconds: 315360000},
+      {op: "JurAllow", list: ["FDA.US.2025"]},
+      {op: "Glb", n: 3}
+    ]}
+  } in
+  gate.eval_with_ctx_json(fda_claim, ctx).ok == true
+}
+
+test "gate no policy = allow all" {
+  let ctx = { reputation: 0, now: 0 } in
+  gate.eval_with_ctx_json(fda_claim, ctx).ok == true
+}
+
+test "gate convenience schema compiles RepMin+JurAllow to 3 ops" {
+  let compiled = gate.compile({ RepMin: 5, JurAllow: ["FDA.US.2025"] }) in
+  list.len(compiled.ok) == 3
+}

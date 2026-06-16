@@ -1,0 +1,10 @@
+{
+  "jurisdiction": "FDA.US.2025",
+  "rules": [
+    {
+      "op": "RepMin",
+      "val": 0
+    }
+  ],
+  "version": "0.1.0"
+}

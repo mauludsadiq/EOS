@@ -1,0 +1,42 @@
+import("std/rec") as rec
+import("../src/kernel/witness") as witness
+import("../src/kernel/keypair") as keypair
+
+let kp = keypair.generate("witness-test-seed")
+let kp2 = keypair.generate("different-seed")
+
+let sample_claims = [
+  { digest_hex: "sha256:abc123", claim_space: "FDA.US.2025" }
+]
+
+test "witness build and verify" {
+  let w = witness.make("drug:aspirin", sample_claims, kp.private_key_hex, 1700000000) in
+  witness.verify(w, kp.public_key_hex).accepted == true
+}
+
+test "witness schema_valid passes for well-formed witness" {
+  let w = witness.make("subject-x", sample_claims, kp.private_key_hex, 1700000000) in
+  witness.schema_valid(w) == true
+}
+
+test "witness with disagreement builds correctly" {
+  let w = witness.make_disagreement(
+    "drug:aspirin",
+    sample_claims,
+    "data incomplete",
+    kp.private_key_hex,
+    1700000000
+  ) in
+  w.disagreement == "data incomplete" && witness.verify(w, kp.public_key_hex).accepted == true
+}
+
+test "witness signed by wrong key fails verify" {
+  let w = witness.make("subject-y", sample_claims, kp.private_key_hex, 1700000000) in
+  witness.verify(w, kp2.public_key_hex).accepted == false
+}
+
+test "witness tampered digest fails verify" {
+  let w = witness.make("subject-z", sample_claims, kp.private_key_hex, 1700000000) in
+  let bad = {...w, digest_hex: "sha256:0000000000000000000000000000000000000000000000000000000000000000"} in
+  witness.verify(bad, kp.public_key_hex).accepted == false
+}

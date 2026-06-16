@@ -1,0 +1,29 @@
+import("std/json") as json
+import("std/hash") as hash
+import("std/str") as str
+
+// canonical.fard — deterministic serialization and digesting
+// All claims must be canonicalized before signing or digesting.
+
+fn canonicalize(obj) {
+  json.canonicalize(obj)
+}
+
+fn digest_text(txt) {
+  hash.sha256_text(txt)
+}
+
+fn digest_obj(obj) {
+  digest_text(canonicalize(obj))
+}
+
+fn strip_prefix(digest_hex) {
+  // "sha256:abc..." -> "abc..."
+  str.slice(digest_hex, 7, str.len(digest_hex))
+}
+
+fn with_prefix(raw_hex) {
+  str.concat(["sha256:", raw_hex])
+}
+
+export { canonicalize, digest_text, digest_obj, strip_prefix, with_prefix }

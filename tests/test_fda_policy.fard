@@ -1,0 +1,44 @@
+import("std/rec") as rec
+import("std/list") as list
+import("std/json") as json
+import("../src/policy/compile") as policy
+import("../src/kernel/gate") as gate
+import("../src/kernel/kernel") as eos
+
+let k = eos.new("fda-test-node")
+
+let fda_json = `{"jurisdiction":"FDA.US.2025","rules":[{"op":"RepMin","val":0}],"version":"0.1.0"}`
+
+let fda_claim = {
+  claim_space: "FDA.US.2025",
+  subject: "drug:aspirin",
+  predicate: "approved",
+  object: "true",
+  evidence_refs: [],
+  issuer_node_id: "ed25519:abc",
+  timestamp_unix_secs: 1700000000
+}
+
+test "FDA policy compiles from fixture" {
+  let result = policy.compile_json_text(fda_json) in
+  rec.has(result, "ok")
+}
+
+test "FDA policy passes claim with rep=0" {
+  let result = policy.compile_json_text(fda_json) in
+  let ctx = { reputation: 0, now: 1702000000 } in
+  gate.eval(result.ok, fda_claim, ctx).ok == true
+}
+
+test "FDA policy bytecode round-trips" {
+  let bc = policy.compile_to_bytecode(fda_json) in
+  let ops = policy.from_bytecode(bc.ok) in
+  list.len(ops) == 1 && list.get(ops, 0).op == "RepMin"
+}
+
+test "minted FDA claim passes gated eval end-to-end" {
+  let envelope = eos.mint_claim(k, "FDA.US.2025", "drug:aspirin", "approved", "true", [], 1700000000) in
+  let result = policy.compile_json_text(fda_json) in
+  let ctx = { reputation: 10, now: 1702000000 } in
+  gate.eval(result.ok, envelope.claim, ctx).ok == true
+}

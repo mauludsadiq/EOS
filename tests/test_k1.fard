@@ -1,0 +1,30 @@
+import("std/str") as str
+import("../src/kernel/k1") as k1
+import("../src/kernel/canonical") as canon
+
+test "k1 round-trip write and read" {
+  let store = k1.new() in
+  let data = "hello, eOS" in
+  let r = k1.write(store, data) in
+  let back = k1.read(r.store, r.digest) in
+  back.ok == data
+}
+
+test "k1 digest starts with sha256:" {
+  let store = k1.new() in
+  let r = k1.write(store, "test bytes") in
+  str.starts_with(r.digest, "sha256:")
+}
+
+test "k1 read missing returns err" {
+  let store = k1.new() in
+  let result = k1.read(store, "sha256:000000") in
+  result.err == "not_found"
+}
+
+test "k1 same bytes same digest" {
+  let store = k1.new() in
+  let r1 = k1.write(store, "deterministic") in
+  let r2 = k1.write(r1.store, "deterministic") in
+  r1.digest == r2.digest
+}

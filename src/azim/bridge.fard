@@ -1,0 +1,39 @@
+import("std/rec") as rec
+import("std/str") as str
+import("std/json") as json
+import("../kernel/kernel") as eos
+import("../anka/bridge") as anka
+
+// azim/bridge.fard — wrap Azim training receipts as eOS claims
+// Each Azim receipt becomes a claim in claim_space "AZIM.TRAIN.v1"
+// allowing gate policies to enforce receipt chain validity.
+
+let AZIM_CLAIM_SPACE = "AZIM.TRAIN.v1"
+
+// receipt_to_claim — convert an Azim receipt record to an eOS envelope
+fn receipt_to_claim(k, receipt, timestamp_unix_secs) {
+  let subject = str.concat(["azim:round:", str.from(rec.getOr(receipt, "round", 0))]) in
+  let object = json.encode({
+    loss_before: rec.getOr(receipt, "loss_before", 0.0),
+    loss_after: rec.getOr(receipt, "loss_after", 0.0),
+    steps: rec.getOr(receipt, "steps", 0),
+    receipt_digest: rec.getOr(receipt, "digest_hex", "")
+  }) in
+  let evidence = [rec.getOr(receipt, "digest_hex", "")] in
+  eos.mint_claim(k, AZIM_CLAIM_SPACE, subject, "training_step", object, evidence, timestamp_unix_secs)
+}
+
+// publish_receipt — mint receipt claim and publish to Anka
+fn publish_receipt(anka_client, k, receipt, timestamp_unix_secs) {
+  let envelope = receipt_to_claim(k, receipt, timestamp_unix_secs) in
+  let result = anka.publish_envelope(anka_client, envelope) in
+  { envelope: envelope, result: result }
+}
+
+// verify_receipt_chain — gate-check a receipt claim against a policy
+fn verify_receipt_chain(k, envelope, policy) {
+  let ctx = { policy: policy } in
+  eos.eval_gate(envelope.claim, ctx)
+}
+
+export { AZIM_CLAIM_SPACE, receipt_to_claim, publish_receipt, verify_receipt_chain }

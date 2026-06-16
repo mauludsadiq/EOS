@@ -1,0 +1,71 @@
+import("std/http") as http
+import("std/json") as json
+import("std/str") as str
+import("std/rec") as rec
+import("../kernel/kernel") as eos
+
+// anka/bridge.fard — publish eOS claims to an Anka mesh node
+// Mirrors Anka sdk.fard's publish/query interface.
+
+fn client(base_url) {
+  let url = if str.ends_with(base_url, "/")
+    then str.slice(base_url, 0, str.len(base_url) - 1)
+    else base_url in
+  { base_url: url }
+}
+
+fn post(c, path, body) {
+  let result = http.post(str.concat([c.base_url, path]), json.encode(body)) in
+  if result.status == 200 then
+    { ok: true, data: json.decode(result.body) }
+  else
+    { ok: false, reason: result.body, status: result.status }
+}
+
+fn get(c, path) {
+  let result = http.get(str.concat([c.base_url, path])) in
+  if result.status == 200 then
+    { ok: true, data: json.decode(result.body) }
+  else
+    { ok: false, reason: result.body, status: result.status }
+}
+
+// publish_envelope — send a signed eOS claim envelope to Anka
+fn publish_envelope(c, envelope) {
+  post(c, "/publish", {
+    claim_space: envelope.claim.claim_space,
+    subject: envelope.claim.subject,
+    predicate: envelope.claim.predicate,
+    object: envelope.claim.object,
+    evidence_refs: envelope.claim.evidence_refs,
+    issuer_node_id: envelope.claim.issuer_node_id,
+    timestamp_unix_secs: envelope.claim.timestamp_unix_secs,
+    digest_hex: envelope.digest_hex,
+    issuer_signature_hex: envelope.issuer_signature_hex
+  })
+}
+
+// publish_claim — mint and publish in one step
+fn publish_claim(c, k, claim_space, subject, predicate, object, evidence_refs, timestamp_unix_secs) {
+  let envelope = eos.mint_claim(k, claim_space, subject, predicate, object, evidence_refs, timestamp_unix_secs) in
+  let result = publish_envelope(c, envelope) in
+  { envelope: envelope, result: result }
+}
+
+fn query(c, claim_space, subject) {
+  get(c, str.concat(["/query/", claim_space, "/", subject]))
+}
+
+fn audit_trail(c, digest_hex) {
+  get(c, str.concat(["/audit/trail/", digest_hex]))
+}
+
+fn health(c) {
+  get(c, "/health")
+}
+
+fn discover(c, capability) {
+  get(c, str.concat(["/discover/", capability]))
+}
+
+export { client, publish_envelope, publish_claim, query, audit_trail, health, discover }

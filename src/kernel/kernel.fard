@@ -1,0 +1,60 @@
+import("k1") as k1
+import("claim") as claim
+import("gate") as gate
+import("witness") as witness
+import("gossip") as gossip
+import("keypair") as keypair
+
+// kernel.fard — assembles all six primitives into one record
+// Usage:
+//   import("kernel") as eos
+//   let k = eos.new("my-node-seed") in
+//   let r = eos.write_blob(k, bytes) in
+
+fn new(node_seed) {
+  let kp = keypair.generate(node_seed) in
+  {
+    keypair: kp,
+    k1: k1.new(),
+    gossip: gossip.new()
+  }
+}
+
+fn write_blob(k, bytes) {
+  let r = k1.write(k.k1, bytes) in
+  { kernel: {...k, k1: r.store}, digest: r.digest }
+}
+
+fn read_blob(k, digest_hex) {
+  k1.read(k.k1, digest_hex)
+}
+
+fn mint_claim(k, claim_space, subject, predicate, object, evidence_refs, timestamp_unix_secs) {
+  let c = claim.make(claim_space, subject, predicate, object, evidence_refs, k.keypair.node_id, timestamp_unix_secs) in
+  let envelope = claim.sign(c, k.keypair.private_key_hex) in
+  envelope
+}
+
+fn verify_claim(k, envelope, public_key_hex) {
+  claim.verify(envelope, public_key_hex)
+}
+
+fn eval_gate(claim_obj, ctx_json) {
+  gate.eval_with_ctx_json(claim_obj, ctx_json)
+}
+
+fn build_witness(k, subject, claim_envelopes, timestamp_unix_secs) {
+  witness.make(subject, claim_envelopes, k.keypair.private_key_hex, timestamp_unix_secs)
+}
+
+fn pub_gossip(k, topic, msg) {
+  let g2 = gossip.publish(k.gossip, topic, msg) in
+  {...k, gossip: g2}
+}
+
+fn sub_gossip(k, topic) {
+  let r = gossip.subscribe(k.gossip, topic) in
+  { kernel: {...k, gossip: r.store}, msgs: r.msgs }
+}
+
+export { new, write_blob, read_blob, mint_claim, verify_claim, eval_gate, build_witness, pub_gossip, sub_gossip }

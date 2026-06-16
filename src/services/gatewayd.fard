@@ -1,0 +1,61 @@
+import("std/net") as net
+import("std/json") as json
+import("std/rec") as rec
+import("std/str") as str
+import("std/env") as env
+import("../kernel/kernel") as eos
+import("../kernel/gate") as gate
+import("../policy/compile") as policy
+
+// gatewayd.fard — HTTP gateway: evaluate claims against policies at ingress
+//
+// POST /eval
+//   body: { claim: {...}, ctx: { reputation, now, policy: {...} } }
+//   returns: { ok: true } | { err: "Gate denied" }
+//
+// POST /compile
+//   body: { policy: "{json text}" }
+//   returns: { ok: true, bytecode: "..." } | { err: "..." }
+//
+// GET /health
+//   returns: { ok: true, service: "gatewayd" }
+
+let k = eos.new("gatewayd-node")
+
+fn handle(req) {
+  let path = req.path in
+  let method = req.method in
+  match path {
+    "/health" =>
+      { status: 200, body: json.encode({ ok: true, service: "gatewayd", node_id: k.keypair.node_id }) },
+    "/eval" =>
+      if method == "POST" then
+        let body = json.decode(req.body) in
+        let claim = rec.getOr(body, "claim", {}) in
+        let ctx = rec.getOr(body, "ctx", {}) in
+        let result = gate.eval_with_ctx_json(claim, ctx) in
+        if rec.has(result, "ok") then
+          { status: 200, body: json.encode(result) }
+        else
+          { status: 403, body: json.encode(result) }
+      else
+        { status: 405, body: json.encode({ err: "method not allowed" }) },
+    "/compile" =>
+      if method == "POST" then
+        let body = json.decode(req.body) in
+        let policy_text = rec.getOr(body, "policy", "{}") in
+        let result = policy.compile_to_bytecode(policy_text) in
+        if rec.has(result, "ok") then
+          { status: 200, body: json.encode(result) }
+        else
+          { status: 400, body: json.encode(result) }
+      else
+        { status: 405, body: json.encode({ err: "method not allowed" }) },
+    _ =>
+      { status: 404, body: json.encode({ err: "not found", path: path }) }
+  }
+}
+
+let port = int.parse(env.get("GATEWAYD_PORT") ?? "7700") |> fn(r) { r.v ?? 7700 }
+
+net.serve(port, fn(req) { handle(req) })

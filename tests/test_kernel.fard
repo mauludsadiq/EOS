@@ -1,0 +1,60 @@
+import("std/rec") as rec
+import("std/str") as str
+import("std/list") as list
+import("../src/kernel/kernel") as eos
+
+let k = eos.new("eos-test-node")
+
+test "kernel write and read blob" {
+ let r = eos.write_blob(k, "hello eOS") in
+ let back = eos.read_blob(r.kernel, r.digest) in
+ back.ok == "hello eOS"
+}
+
+test "kernel blob digest starts with sha256:" {
+ let r = eos.write_blob(k, "some data") in
+ str.starts_with(r.digest, "sha256:")
+}
+
+test "kernel mint and verify claim" {
+ let envelope = eos.mint_claim(k, "FDA.US.2025", "drug:aspirin", "approved", "true", [], 1700000000) in
+ let result = eos.verify_claim(k, envelope, k.keypair.public_key_hex) in
+ result.accepted == true
+}
+
+test "kernel eval gate passes valid claim" {
+ let envelope = eos.mint_claim(k, "FDA.US.2025", "drug:aspirin", "approved", "true", [], 1700000000) in
+ let ctx = {
+   reputation: 50,
+   now: 1702000000,
+   policy: { rules: [
+     {op: "RepMin", val: 10},
+     {op: "JurAllow", list: ["FDA.US.2025"]},
+     {op: "Glb", n: 2}
+   ]}
+ } in
+ eos.eval_gate(envelope.claim, ctx).ok == true
+}
+
+test "kernel eval gate rejects wrong jurisdiction" {
+ let envelope = eos.mint_claim(k, "FDA.US.2025", "drug:aspirin", "approved", "true", [], 1700000000) in
+ let ctx = {
+   reputation: 50,
+   now: 1702000000,
+   policy: { rules: [{op: "JurAllow", list: ["EMA.EU.2025"]}] }
+ } in
+ rec.has(eos.eval_gate(envelope.claim, ctx), "err")
+}
+
+test "kernel build witness over minted claim" {
+ let envelope = eos.mint_claim(k, "FDA.US.2025", "drug:aspirin", "approved", "true", [], 1700000000) in
+ let w = eos.build_witness(k, "drug:aspirin", [envelope], 1700000001) in
+ w.subject == "drug:aspirin" && w.disagreement == null
+}
+
+test "kernel gossip pub and sub" {
+ let topic = "sha256:feedbeef" in
+ let k2 = eos.pub_gossip(k, topic, {event: "test"}) in
+ let r = eos.sub_gossip(k2, topic) in
+ list.len(r.msgs) == 1
+}

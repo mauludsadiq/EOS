@@ -1,0 +1,46 @@
+import("std/rec") as rec
+import("std/str") as str
+import("std/list") as list
+import("../src/kernel/kernel") as eos
+import("../src/azim/bridge") as azim
+
+let k = eos.new("azim-test-node")
+
+let sample_receipt = {
+ round: 8,
+ loss_before: 3.0139,
+ loss_after: 3.0111,
+ steps: 29600,
+ digest_hex: "sha256:abc123def456"
+}
+
+test "azim receipt_to_claim produces valid envelope" {
+ let envelope = azim.receipt_to_claim(k, sample_receipt, 1700000000) in
+ envelope.claim.claim_space == azim.AZIM_CLAIM_SPACE
+}
+
+test "azim receipt subject encodes round number" {
+ let envelope = azim.receipt_to_claim(k, sample_receipt, 1700000000) in
+ str.starts_with(envelope.claim.subject, "azim:round:")
+}
+
+test "azim receipt predicate is training_step" {
+ let envelope = azim.receipt_to_claim(k, sample_receipt, 1700000000) in
+ envelope.claim.predicate == "training_step"
+}
+
+test "azim receipt evidence_refs contains digest" {
+ let envelope = azim.receipt_to_claim(k, sample_receipt, 1700000000) in
+ list.len(envelope.claim.evidence_refs) == 1
+}
+
+test "azim receipt claim passes open gate" {
+ let envelope = azim.receipt_to_claim(k, sample_receipt, 1700000000) in
+ let result = azim.verify_receipt_chain(k, envelope, { rules: [{op: "RepMin", val: 0}] }) in
+ result.ok == true
+}
+
+test "azim receipt envelope has valid digest" {
+ let envelope = azim.receipt_to_claim(k, sample_receipt, 1700000000) in
+ str.starts_with(envelope.digest_hex, "sha256:")
+}

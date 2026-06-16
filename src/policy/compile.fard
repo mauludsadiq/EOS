@@ -1,0 +1,46 @@
+import("std/json") as json
+import("std/rec") as rec
+import("std/list") as list
+import("std/fs") as fs
+import("std/str") as str
+import("../kernel/gate") as gate
+
+// policy/compile.fard — compile JSON policy files to bytecode records
+// Bytecode here is a FARD record { ops: [...] } serialized as canonical JSON.
+// This replaces the Rust policyd binary from the scaffold.
+
+fn compile_json_text(json_text) {
+  let decoded = json.decode(json_text) in
+  gate.compile(decoded)
+}
+
+fn compile_file(path) {
+  let content = fs.read_text(path) in
+  compile_json_text(content)
+}
+
+fn to_bytecode(program_ops) {
+  // Bytecode = canonical JSON of the ops list
+  json.encode({ ops: program_ops })
+}
+
+fn from_bytecode(bytecode_text) {
+  let decoded = json.decode(bytecode_text) in
+  decoded.ops
+}
+
+fn compile_to_bytecode(json_text) {
+  let result = compile_json_text(json_text) in
+  if rec.has(result, "err") then result
+  else { ok: to_bytecode(result.ok) }
+}
+
+fn compile_file_to_bytecode(input_path, output_path) {
+  let result = compile_to_bytecode(fs.read_text(input_path)) in
+  if rec.has(result, "err") then result
+  else
+    let _ = fs.write_text(output_path, result.ok) in
+    { ok: true, bytes: str.len(result.ok), input: input_path, output: output_path }
+}
+
+export { compile_json_text, compile_file, to_bytecode, from_bytecode, compile_to_bytecode, compile_file_to_bytecode }

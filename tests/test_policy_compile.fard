@@ -1,0 +1,55 @@
+import("std/rec") as rec
+import("std/list") as list
+import("std/json") as json
+import("../src/policy/compile") as policy
+import("../src/kernel/gate") as gate
+
+let fda_policy_json = `{"jurisdiction":"FDA.US.2025","rules":[{"op":"RepMin","val":0}],"version":"0.1.0"}`
+
+let convenience_policy_json = `{"RepMin":10,"AgeMax":315360000,"JurAllow":["FDA.US.2025"]}`
+
+let rpn_policy_json = `{"rules":[{"op":"RepMin","val":10},{"op":"JurAllow","list":["FDA.US.2025"]},{"op":"Glb","n":2}]}`
+
+let fda_claim = {
+  claim_space: "FDA.US.2025",
+  subject: "drug:aspirin",
+  predicate: "approved",
+  object: "true",
+  evidence_refs: [],
+  issuer_node_id: "ed25519:abc",
+  timestamp_unix_secs: 1700000000
+}
+
+test "compile FDA policy JSON succeeds" {
+  let result = policy.compile_json_text(fda_policy_json) in
+  rec.has(result, "ok") && list.len(result.ok) == 1
+}
+
+test "compile convenience schema produces Glb op" {
+  let result = policy.compile_json_text(convenience_policy_json) in
+  let last_op = list.get(result.ok, list.len(result.ok) - 1) in
+  last_op.op == "Glb"
+}
+
+test "compile RPN policy preserves op count" {
+  let result = policy.compile_json_text(rpn_policy_json) in
+  list.len(result.ok) == 3
+}
+
+test "compile to bytecode and back round-trips" {
+  let bytecode = policy.compile_to_bytecode(rpn_policy_json) in
+  let ops = policy.from_bytecode(bytecode.ok) in
+  list.len(ops) == 3
+}
+
+test "compiled policy evaluates correctly against claim" {
+  let result = policy.compile_json_text(rpn_policy_json) in
+  let ctx = { reputation: 20, now: 1702000000 } in
+  gate.eval(result.ok, fda_claim, ctx).ok == true
+}
+
+test "compiled policy rejects insufficient reputation" {
+  let result = policy.compile_json_text(rpn_policy_json) in
+  let ctx = { reputation: 5, now: 1702000000 } in
+  rec.has(gate.eval(result.ok, fda_claim, ctx), "err")
+}

@@ -1,0 +1,47 @@
+import("std/http") as http
+import("std/json") as json
+import("std/str") as str
+import("../kernel/kernel") as eos
+import("../kernel/witness") as witness
+
+// witness_bridge.fard — submit eOS witness records to Anka
+
+fn post(c, path, body) {
+  let result = http.post(str.concat([c.base_url, path]), json.encode(body)) in
+  if result.status == 200 then
+    { ok: true, data: json.decode(result.body) }
+  else
+    { ok: false, reason: result.body, status: result.status }
+}
+
+// submit_witness — build and post a witness to Anka /witness
+fn submit_witness(c, k, subject, claim_envelopes, timestamp_unix_secs) {
+  let w = eos.build_witness(k, subject, claim_envelopes, timestamp_unix_secs) in
+  let result = post(c, "/witness", {
+    subject: w.subject,
+    claims: w.claims,
+    disagreement: w.disagreement,
+    timestamp_unix_secs: w.timestamp_unix_secs,
+    digest_hex: w.digest_hex,
+    signature_hex: w.signature_hex,
+    issuer_node_id: k.keypair.node_id
+  }) in
+  { witness: w, result: result }
+}
+
+fn submit_disagreement(c, k, subject, claim_envelopes, disagreement, timestamp_unix_secs) {
+  let w = eos.build_witness(k, subject, claim_envelopes, timestamp_unix_secs) in
+  let w = {...w, disagreement: disagreement} in
+  let result = post(c, "/witness", {
+    subject: w.subject,
+    claims: w.claims,
+    disagreement: w.disagreement,
+    timestamp_unix_secs: w.timestamp_unix_secs,
+    digest_hex: w.digest_hex,
+    signature_hex: w.signature_hex,
+    issuer_node_id: k.keypair.node_id
+  }) in
+  { witness: w, result: result }
+}
+
+export { submit_witness, submit_disagreement }

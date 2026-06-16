@@ -1,0 +1,68 @@
+import("std/list") as list
+import("std/type") as type
+import("std/rec") as rec
+import("canonical") as canon
+import("std/crypto") as crypto
+
+// witness.fard — build and verify witness records
+// A witness is an independent attestation that a claim is valid.
+
+fn make(subject, claims, private_key_hex, timestamp_unix_secs) {
+  let w = {
+    subject: subject,
+    claims: claims,
+    disagreement: null,
+    timestamp_unix_secs: timestamp_unix_secs
+  } in
+  let digest_hex = canon.digest_obj(w) in
+  let raw = canon.strip_prefix(digest_hex) in
+  let sig = crypto.ed25519_sign(private_key_hex, raw) in
+  {
+    ...w,
+    digest_hex: digest_hex,
+    signature_hex: sig
+  }
+}
+
+fn make_disagreement(subject, claims, disagreement, private_key_hex, timestamp_unix_secs) {
+  let w = {
+    subject: subject,
+    claims: claims,
+    disagreement: disagreement,
+    timestamp_unix_secs: timestamp_unix_secs
+  } in
+  let digest_hex = canon.digest_obj(w) in
+  let raw = canon.strip_prefix(digest_hex) in
+  let sig = crypto.ed25519_sign(private_key_hex, raw) in
+  {
+    ...w,
+    digest_hex: digest_hex,
+    signature_hex: sig
+  }
+}
+
+fn verify(witness, public_key_hex) {
+  let core = {
+    subject: witness.subject,
+    claims: witness.claims,
+    disagreement: witness.disagreement,
+    timestamp_unix_secs: witness.timestamp_unix_secs
+  } in
+  let expected = canon.digest_obj(core) in
+  let digest_ok = expected == witness.digest_hex in
+  let raw = canon.strip_prefix(witness.digest_hex) in
+  let sig_ok = if digest_ok
+    then crypto.ed25519_verify(public_key_hex, raw, witness.signature_hex)
+    else false in
+  { accepted: digest_ok && sig_ok, digest_ok: digest_ok, signature_ok: sig_ok }
+}
+
+fn schema_valid(w) {
+  type.of(w.subject) == "text" &&
+  type.of(w.claims) == "list" &&
+  type.of(w.timestamp_unix_secs) == "int" &&
+  type.of(w.digest_hex) == "text" &&
+  type.of(w.signature_hex) == "text"
+}
+
+export { make, make_disagreement, verify, schema_valid }

@@ -1,0 +1,41 @@
+import("std/hash") as hash
+import("std/bytes") as bytes
+import("std/rec") as rec
+import("std/str") as str
+
+// K1 — content-addressed blob store
+// Keys are "sha256:<hex>" strings. Values are the raw data.
+
+fn digest_of(data) {
+  // data may be text or bytes — hash as text, get hex digest
+  let d = if type_is_bytes(data)
+    then hash.sha256_text(bytes.to_hex(data))
+    else hash.sha256_text(data) in
+  d
+}
+
+fn type_is_bytes(v) {
+  // sha256_text returns "sha256:..." prefix string
+  false  // we treat all input as text for now; bytes go via to_hex
+}
+
+fn new() { {} }
+
+fn write(store, data) {
+  let digest = hash.sha256_text(data) in
+  let s2 = rec.set(store, digest, data) in
+  { store: s2, digest: digest }
+}
+
+fn read(store, digest_hex) {
+  if rec.has(store, digest_hex) then
+    { ok: rec.get(store, digest_hex) }
+  else
+    { err: "not_found", digest: digest_hex }
+}
+
+fn has(store, digest_hex) {
+  rec.has(store, digest_hex)
+}
+
+export { new, write, read, has }

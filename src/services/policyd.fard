@@ -1,0 +1,34 @@
+import("std/env") as env
+import("std/fs") as fs
+import("std/json") as json
+import("std/str") as str
+import("std/rec") as rec
+import("../policy/compile") as policy
+
+// policyd.fard — CLI: compile a policy JSON file to bytecode
+// Usage: fardrun run --program src/services/policyd.fard -- --input policies/FDA.US.2025.json --output out/FDA.US.2025.bytecode
+
+fn parse_args(args) {
+  let input = list.find(list.range(0, list.len(args) - 1), fn(i) {
+    list.get(args, i) == "--input"
+  }) in
+  let output = list.find(list.range(0, list.len(args) - 1), fn(i) {
+    list.get(args, i) == "--output"
+  }) in
+  {
+    input: if input != null then list.get(args, input.some + 1) ?? null else null,
+    output: if output != null then list.get(args, output.some + 1) ?? null else null
+  }
+}
+
+let args = env.args()
+let parsed = parse_args(args)
+
+let result = if parsed.input == null then
+  { err: "missing --input argument" }
+else if parsed.output == null then
+  { err: "missing --output argument" }
+else
+  policy.compile_file_to_bytecode(parsed.input, parsed.output)
+
+result

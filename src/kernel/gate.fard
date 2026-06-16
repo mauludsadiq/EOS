@@ -1,0 +1,89 @@
+import("std/list") as list
+import("std/rec") as rec
+
+fn eval_op(op, stack, claim, ctx) {
+  match op.op {
+    "RepMin" =>
+      let rep = rec.getOr(ctx, "reputation", 0) in
+      list.append(stack, rep >= op.val),
+    "AgeMax" =>
+      let now = rec.getOr(ctx, "now", 0) in
+      let ts = rec.getOr(claim, "timestamp_unix_secs", 0) in
+      list.append(stack, (now - ts) <= op.seconds),
+    "JurAllow" =>
+      let ctx_jur = rec.getOr(ctx, "allowed_jurisdictions", null) in
+      let allowed = if ctx_jur == null then op.list else ctx_jur in
+      let space = rec.getOr(claim, "claim_space", "") in
+      list.append(stack, list.any(allowed, fn(s) { s == space })),
+    "And" =>
+      let len = list.len(stack) in
+      let a = list.get(stack, len - 2) ?? false in
+      let b = list.get(stack, len - 1) ?? false in
+      let rest = list.take(stack, len - 2) in
+      list.append(rest, a && b),
+    "Or" =>
+      let len = list.len(stack) in
+      let a = list.get(stack, len - 2) ?? false in
+      let b = list.get(stack, len - 1) ?? false in
+      let rest = list.take(stack, len - 2) in
+      list.append(rest, a || b),
+    "Glb" =>
+      let n = op.n in
+      let len = list.len(stack) in
+      let top = list.drop(stack, len - n) in
+      let rest = list.take(stack, len - n) in
+      let result = list.fold(top, true, fn(acc, v) { acc && v }) in
+      list.append(rest, result),
+    _ => stack
+  }
+}
+
+fn eval(program, claim, ctx) {
+  let stack = list.fold(program, [], fn(st, op) {
+    eval_op(op, st, claim, ctx)
+  }) in
+  let passed = list.get(stack, list.len(stack) - 1) ?? false in
+  if passed then { ok: true }
+  else { err: "Gate denied" }
+}
+
+fn compile(policy_json) {
+  if rec.has(policy_json, "rules") then
+    { ok: policy_json.rules }
+  else
+    let ops = [] in
+    let ops = if rec.has(policy_json, "RepMin")
+      then list.append(ops, {op: "RepMin", val: policy_json.RepMin})
+      else ops in
+    let ops = if rec.has(policy_json, "AgeMax")
+      then list.append(ops, {op: "AgeMax", seconds: policy_json.AgeMax})
+      else ops in
+    let ops = if rec.has(policy_json, "JurAllow")
+      then list.append(ops, {op: "JurAllow", list: policy_json.JurAllow})
+      else ops in
+    let count = list.len(ops) in
+    let ops = if count > 1
+      then list.append(ops, {op: "Glb", n: count})
+      else ops in
+    { ok: ops }
+}
+
+fn eval_with_ctx_json(claim, ctx_json) {
+  let ctx = {
+    reputation: rec.getOr(ctx_json, "reputation", 0),
+    now: rec.getOr(ctx_json, "now", 0),
+    allowed_jurisdictions: rec.getOr(ctx_json, "allowed_jurisdictions", null)
+  } in
+  if rec.has(ctx_json, "policy") then
+    let compiled = compile(ctx_json.policy) in
+    if rec.has(compiled, "err") then compiled
+    else eval(compiled.ok, claim, ctx)
+  else if rec.has(ctx_json, "rules") then
+    let compiled = compile({rules: ctx_json.rules}) in
+    if rec.has(compiled, "err") then compiled
+    else eval(compiled.ok, claim, ctx)
+  else
+    { ok: true }
+}
+
+export { eval, compile, eval_with_ctx_json }

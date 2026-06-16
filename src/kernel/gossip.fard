@@ -1,0 +1,30 @@
+import("std/rec") as rec
+import("std/list") as list
+
+// gossip.fard — in-memory pub/sub by topic digest
+// Topic is a digest_hex string. Messages are lists of records.
+// In production this becomes HTTP gossip between nodes (see Anka transport).
+
+fn new() { {} }
+
+fn publish(store, topic, msg) {
+  let existing = rec.getOr(store, topic, []) in
+  rec.set(store, topic, list.append(existing, msg))
+}
+
+fn subscribe(store, topic) {
+  // Returns all messages for topic and clears the queue
+  let msgs = rec.getOr(store, topic, []) in
+  let store2 = rec.set(store, topic, []) in
+  { msgs: msgs, store: store2 }
+}
+
+fn peek(store, topic) {
+  rec.getOr(store, topic, [])
+}
+
+fn topics(store) {
+  rec.keys(store)
+}
+
+export { new, publish, subscribe, peek, topics }

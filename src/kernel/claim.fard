@@ -1,0 +1,86 @@
+import("std/type") as type
+import("std/rec") as rec
+import("std/str") as str
+import("std/crypto") as crypto
+import("canonical") as canon
+
+// claim.fard — mint, sign, verify epistemic claims
+// A claim is: who said what about what, when, in which jurisdiction.
+// An envelope is a claim + digest + signature.
+
+fn make(claim_space, subject, predicate, object, evidence_refs, issuer_node_id, timestamp_unix_secs) {
+  {
+    claim_space: claim_space,
+    subject: subject,
+    predicate: predicate,
+    object: object,
+    evidence_refs: evidence_refs,
+    issuer_node_id: issuer_node_id,
+    timestamp_unix_secs: timestamp_unix_secs
+  }
+}
+
+fn sign(claim, private_key_hex) {
+  let digest_hex = canon.digest_obj(claim) in
+  let raw = canon.strip_prefix(digest_hex) in
+  let sig = crypto.ed25519_sign(private_key_hex, raw) in
+  {
+    claim: claim,
+    digest_hex: digest_hex,
+    issuer_signature_hex: sig
+  }
+}
+
+fn verify(envelope, public_key_hex) {
+  let schema_ok = schema_valid(envelope) in
+  let digest_ok = if schema_ok
+    then canon.digest_obj(envelope.claim) == envelope.digest_hex
+    else false in
+  let raw = canon.strip_prefix(envelope.digest_hex) in
+  let sig_ok = if digest_ok
+    then crypto.ed25519_verify(public_key_hex, raw, envelope.issuer_signature_hex)
+    else false in
+  {
+    accepted: schema_ok && digest_ok && sig_ok,
+    schema_ok: schema_ok,
+    digest_ok: digest_ok,
+    signature_ok: sig_ok,
+    digest_hex: envelope.digest_hex
+  }
+}
+
+fn verify_digest_only(envelope) {
+  let schema_ok = schema_valid(envelope) in
+  let digest_ok = if schema_ok
+    then canon.digest_obj(envelope.claim) == envelope.digest_hex
+    else false in
+  {
+    accepted: schema_ok && digest_ok,
+    schema_ok: schema_ok,
+    digest_ok: digest_ok,
+    signature_ok: null,
+    digest_hex: envelope.digest_hex
+  }
+}
+
+fn schema_valid(envelope) {
+  type.of(envelope) == "record" &&
+  rec.has(envelope, "claim") &&
+  rec.has(envelope, "digest_hex") &&
+  rec.has(envelope, "issuer_signature_hex") &&
+  type.of(envelope.digest_hex) == "text" &&
+  str.starts_with(envelope.digest_hex, "sha256:") &&
+  claim_schema_valid(envelope.claim)
+}
+
+fn claim_schema_valid(c) {
+  type.of(c.claim_space) == "text" &&
+  type.of(c.subject) == "text" &&
+  type.of(c.predicate) == "text" &&
+  type.of(c.object) == "text" &&
+  type.of(c.evidence_refs) == "list" &&
+  type.of(c.issuer_node_id) == "text" &&
+  type.of(c.timestamp_unix_secs) == "int"
+}
+
+export { make, sign, verify, verify_digest_only, schema_valid, claim_schema_valid }

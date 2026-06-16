@@ -1,0 +1,31 @@
+import("../src/kernel/claim") as claim
+import("../src/kernel/keypair") as keypair
+
+test "claim round-trip sign and verify" {
+  let kp = keypair.generate("test-node-seed") in
+  let c = claim.make(
+    "FDA.US.2025",
+    "drug:aspirin",
+    "approved",
+    "true",
+    [],
+    kp.node_id,
+    1700000000
+  ) in
+  let envelope = claim.sign(c, kp.private_key_hex) in
+  let result = claim.verify(envelope, kp.public_key_hex) in
+  result.accepted == true
+}
+
+test "claim schema_valid rejects bad envelope" {
+  let bad = { claim: {}, digest_hex: "nope", issuer_signature_hex: "x" } in
+  claim.schema_valid(bad) == false
+}
+
+test "claim verify_digest_only works without sig check" {
+  let kp = keypair.generate("seed-2") in
+  let c = claim.make("TEST", "s", "p", "o", [], kp.node_id, 1000) in
+  let envelope = claim.sign(c, kp.private_key_hex) in
+  let result = claim.verify_digest_only(envelope) in
+  result.accepted == true
+}
