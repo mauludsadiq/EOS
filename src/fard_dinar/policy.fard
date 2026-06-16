@@ -1,0 +1,84 @@
+import("std/list") as list
+import("std/rec") as rec
+import("../kernel/gate") as gate
+import("./jurisdictions") as jur
+
+// fard_dinar/policy.fard — gate policies for Fard Dinar transactions
+//
+// Policies enforce:
+//   - jurisdiction (FARD_DINAR.TX.v1 or FARD_DINAR.DEPOSIT.v1)
+//   - minimum reputation for oracle attestations
+//   - treasury sufficiency (RepMin on treasury node)
+//   - age limits on deposits
+
+// Policy: any transfer in FARD_DINAR.TX.v1 claim space
+let transfer_policy = {
+  rules: [
+    { op: "JurAllow", list: ["FARD_DINAR.TX.v1"] }
+  ]
+}
+
+// Policy: oracle-attested deposit
+let deposit_policy = {
+  rules: [
+    { op: "JurAllow", list: ["FARD_DINAR.DEPOSIT.v1"] },
+    { op: "RepMin", val: 1 },
+    { op: "Glb", n: 2 }
+  ]
+}
+
+// Policy: treasury operation — requires high reputation
+let treasury_policy = {
+  rules: [
+    { op: "JurAllow", list: ["FARD_DINAR.TREASURY.v1"] },
+    { op: "RepMin", val: 10 },
+    { op: "Glb", n: 2 }
+  ]
+}
+
+// Policy: recent deposit only (within 24 hours)
+let fresh_deposit_policy = {
+  rules: [
+    { op: "JurAllow", list: ["FARD_DINAR.DEPOSIT.v1"] },
+    { op: "AgeMax", seconds: 86400 },
+    { op: "Glb", n: 2 }
+  ]
+}
+
+// Policy: open — any FD claim passes (dev/test)
+let open_policy = {
+  rules: [
+    { op: "JurAllow", list: [
+      "FARD_DINAR.TX.v1",
+      "FARD_DINAR.DEPOSIT.v1",
+      "FARD_DINAR.ORACLE.v1",
+      "FARD_DINAR.STATE.v1",
+      "FARD_DINAR.TREASURY.v1"
+    ]}
+  ]
+}
+
+fn eval_transfer(claim, ctx_overrides) {
+  let ctx = { ...ctx_overrides, policy: transfer_policy } in
+  gate.eval_with_ctx_json(claim, ctx)
+}
+
+fn eval_deposit(claim, ctx_overrides) {
+  let ctx = { ...ctx_overrides, policy: deposit_policy } in
+  gate.eval_with_ctx_json(claim, ctx)
+}
+
+fn eval_treasury(claim, ctx_overrides) {
+  let ctx = { ...ctx_overrides, policy: treasury_policy } in
+  gate.eval_with_ctx_json(claim, ctx)
+}
+
+fn eval_open(claim) {
+  gate.eval_with_ctx_json(claim, { policy: open_policy })
+}
+
+export {
+  transfer_policy, deposit_policy, treasury_policy,
+  fresh_deposit_policy, open_policy,
+  eval_transfer, eval_deposit, eval_treasury, eval_open
+}

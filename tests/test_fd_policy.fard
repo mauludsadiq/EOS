@@ -1,0 +1,90 @@
+import("std/rec") as rec
+import("std/list") as list
+import("../src/kernel/kernel") as eos
+import("../src/fard_dinar/claim") as fd_claim
+import("../src/fard_dinar/policy") as fd_policy
+import("../src/fard_dinar/jurisdictions") as jur
+
+let k = eos.new("fd-policy-test-node")
+
+let sample_transfer = {
+  kind: "transfer",
+  from: "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+  to: "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c",
+  amount: 2000,
+  nonce: 0,
+  signature: "abc"
+}
+
+let sample_deposit = {
+  kind: "deposit",
+  oracle_id: "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+  beneficiary: "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+  usd_cents: 10000,
+  external_ref: "bank-wire-0001",
+  timestamp: 1710000000,
+  signature: "abc"
+}
+
+let sample_receipt = {
+  run_id: "ahd1024:abc123def456abc123def456abc123def456abc123def456abc123def456abc12",
+  program_hash: "ahd1024:prog",
+  input_hash: "ahd1024:input",
+  pre_state_hash: "ahd1024:pre",
+  post_state_hash: "ahd1024:post",
+  trace_hash: "ahd1024:trace",
+  transfer_effects: { amount: 2000, user_reward: 40, vendor_reward: 0, is_merchant: false }
+}
+
+test "transfer claim passes transfer_policy" {
+  let env = fd_claim.receipt_to_envelope(k, sample_transfer, sample_receipt, 1710000000) in
+  fd_policy.eval_transfer(env.claim, { reputation: 0, now: 1710000001 }).ok == true
+}
+
+test "transfer claim fails deposit_policy" {
+  let env = fd_claim.receipt_to_envelope(k, sample_transfer, sample_receipt, 1710000000) in
+  rec.has(fd_policy.eval_deposit(env.claim, { reputation: 5, now: 1710000001 }), "err")
+}
+
+test "deposit claim passes deposit_policy with rep>=1" {
+  let env = fd_claim.receipt_to_envelope(k, sample_deposit, sample_receipt, 1710000000) in
+  fd_policy.eval_deposit(env.claim, { reputation: 1, now: 1710000001 }).ok == true
+}
+
+test "deposit claim fails deposit_policy with rep=0" {
+  let env = fd_claim.receipt_to_envelope(k, sample_deposit, sample_receipt, 1710000000) in
+  rec.has(fd_policy.eval_deposit(env.claim, { reputation: 0, now: 1710000001 }), "err")
+}
+
+test "transfer claim passes open_policy" {
+  let env = fd_claim.receipt_to_envelope(k, sample_transfer, sample_receipt, 1710000000) in
+  fd_policy.eval_open(env.claim).ok == true
+}
+
+test "deposit claim passes open_policy" {
+  let env = fd_claim.receipt_to_envelope(k, sample_deposit, sample_receipt, 1710000000) in
+  fd_policy.eval_open(env.claim).ok == true
+}
+
+test "treasury_policy requires rep>=10" {
+  let env = eos.mint_claim(k, jur.FARD_DINAR_TREASURY_V1, "fd:treasury", "withdraw", "{}", [], 1710000000) in
+  let result = fd_policy.eval_treasury(env.claim, { reputation: 9, now: 1710000001 }) in
+  rec.has(result, "err")
+}
+
+test "treasury_policy passes with rep>=10" {
+  let env = eos.mint_claim(k, jur.FARD_DINAR_TREASURY_V1, "fd:treasury", "withdraw", "{}", [], 1710000000) in
+  fd_policy.eval_treasury(env.claim, { reputation: 10, now: 1710000001 }).ok == true
+}
+
+test "is_fard_dinar true for TX claim space" {
+  jur.is_fard_dinar(jur.FARD_DINAR_TX_V1) == true
+}
+
+test "is_fard_dinar false for FDA space" {
+  jur.is_fard_dinar("FDA.US.2025") == false
+}
+
+test "ALL contains 5 FD jurisdictions" {
+  list.len(jur.ALL) == 5
+}

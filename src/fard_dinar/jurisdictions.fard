@@ -1,0 +1,26 @@
+import("std/list") as list
+
+// fard_dinar/jurisdictions.fard — Fard Dinar claim space constants
+
+let FARD_DINAR_TX_V1       = "FARD_DINAR.TX.v1"
+let FARD_DINAR_DEPOSIT_V1  = "FARD_DINAR.DEPOSIT.v1"
+let FARD_DINAR_ORACLE_V1   = "FARD_DINAR.ORACLE.v1"
+let FARD_DINAR_STATE_V1    = "FARD_DINAR.STATE.v1"
+let FARD_DINAR_TREASURY_V1 = "FARD_DINAR.TREASURY.v1"
+
+let ALL = [
+  FARD_DINAR_TX_V1,
+  FARD_DINAR_DEPOSIT_V1,
+  FARD_DINAR_ORACLE_V1,
+  FARD_DINAR_STATE_V1,
+  FARD_DINAR_TREASURY_V1
+]
+
+fn is_fard_dinar(claim_space) {
+  list.any(ALL, fn(j) { j == claim_space })
+}
+
+export {
+  FARD_DINAR_TX_V1, FARD_DINAR_DEPOSIT_V1, FARD_DINAR_ORACLE_V1,
+  FARD_DINAR_STATE_V1, FARD_DINAR_TREASURY_V1, ALL, is_fard_dinar
+}

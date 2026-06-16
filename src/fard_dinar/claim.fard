@@ -1,0 +1,79 @@
+import("std/json") as json
+import("std/str") as str
+import("std/rec") as rec
+import("../kernel/kernel") as eos
+import("./jurisdictions") as jur
+
+// fard_dinar/claim.fard — convert Fard Dinar engine receipts to eOS claims
+//
+// A Fard Dinar receipt:
+//   { run_id, program_hash, input_hash, pre_state_hash, post_state_hash,
+//     trace_hash, transfer_effects }
+//
+// Maps to an eOS claim envelope in FARD_DINAR.TX.v1 or FARD_DINAR.DEPOSIT.v1
+
+fn receipt_claim_space(event) {
+  if event.kind == "deposit" then jur.FARD_DINAR_DEPOSIT_V1
+  else jur.FARD_DINAR_TX_V1
+}
+
+fn receipt_subject(receipt) {
+  str.concat(["fd:tx:", receipt.run_id])
+}
+
+fn receipt_object(event, receipt) {
+  if event.kind == "transfer" then
+    json.encode({
+      kind:            "transfer",
+      from:            event.from,
+      to:              event.to,
+      amount:          event.amount,
+      nonce:           event.nonce,
+      run_id:          receipt.run_id,
+      pre_state_hash:  receipt.pre_state_hash,
+      post_state_hash: receipt.post_state_hash,
+      trace_hash:      receipt.trace_hash,
+      transfer_effects: receipt.transfer_effects
+    })
+  else
+    json.encode({
+      kind:            "deposit",
+      oracle_id:       event.oracle_id,
+      beneficiary:     event.beneficiary,
+      usd_cents:       event.usd_cents,
+      external_ref:    event.external_ref,
+      run_id:          receipt.run_id,
+      pre_state_hash:  receipt.pre_state_hash,
+      post_state_hash: receipt.post_state_hash,
+      trace_hash:      receipt.trace_hash
+    })
+}
+
+fn receipt_to_envelope(k, event, receipt, timestamp_unix_secs) {
+  let claim_space = receipt_claim_space(event) in
+  let subject = receipt_subject(receipt) in
+  let object = receipt_object(event, receipt) in
+  let evidence = [receipt.run_id, receipt.trace_hash] in
+  eos.mint_claim(k, claim_space, subject, event.kind, object, evidence, timestamp_unix_secs)
+}
+
+fn transfer_to_envelope(k, event, receipt, timestamp_unix_secs) {
+  receipt_to_envelope(k, event, receipt, timestamp_unix_secs)
+}
+
+fn deposit_to_envelope(k, event, receipt, timestamp_unix_secs) {
+  receipt_to_envelope(k, event, receipt, timestamp_unix_secs)
+}
+
+// state_snapshot_to_envelope — publish a state hash as an eOS claim
+fn state_snapshot_to_envelope(k, state_hash, block_height, timestamp_unix_secs) {
+  let subject = str.concat(["fd:state:", str.from(block_height)]) in
+  let object = json.encode({ state_hash: state_hash, block_height: block_height }) in
+  eos.mint_claim(k, jur.FARD_DINAR_STATE_V1, subject, "state_snapshot", object, [state_hash], timestamp_unix_secs)
+}
+
+export {
+  receipt_claim_space, receipt_subject, receipt_object,
+  receipt_to_envelope, transfer_to_envelope, deposit_to_envelope,
+  state_snapshot_to_envelope
+}

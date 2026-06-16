@@ -1,0 +1,63 @@
+import("std/json") as json
+import("std/str") as str
+import("std/list") as list
+import("std/rec") as rec
+import("../kernel/kernel") as eos
+import("../anka/bridge") as anka
+import("../anka/witness_bridge") as witness_bridge
+import("./claim") as fd_claim
+import("./policy") as fd_policy
+import("./jurisdictions") as jur
+
+// fard_dinar/bridge.fard — publish Fard Dinar receipts to the Anka mesh via eOS
+//
+// Flow:
+//   1. FD engine applies event -> receipt
+//   2. bridge converts receipt to eOS claim envelope
+//   3. gate policy evaluates the claim
+//   4. if passes: publish to Anka mesh
+//   5. submit structural witness for the published claim
+//   6. return { envelope, gate_result, anka_result, witness_result }
+
+fn publish_receipt(anka_client, k, event, receipt, timestamp_unix_secs) {
+  let envelope = fd_claim.receipt_to_envelope(k, event, receipt, timestamp_unix_secs) in
+  let gate_result = fd_policy.eval_open(envelope.claim) in
+  let anka_result = if rec.has(gate_result, "ok")
+    then anka.publish_envelope(anka_client, envelope)
+    else { ok: false, reason: "gate denied", gate: gate_result } in
+  let witness_result = if rec.has(anka_result, "ok") && anka_result.ok
+    then witness_bridge.submit_structural(anka_client, k, envelope.digest_hex, timestamp_unix_secs)
+    else { ok: false, reason: "skipped — publish failed" } in
+  {
+    envelope: envelope,
+    gate_result: gate_result,
+    anka_result: anka_result,
+    witness_result: witness_result,
+    published: rec.has(anka_result, "ok") && anka_result.ok
+  }
+}
+
+fn publish_state_snapshot(anka_client, k, state_hash, block_height, timestamp_unix_secs) {
+  let envelope = fd_claim.state_snapshot_to_envelope(k, state_hash, block_height, timestamp_unix_secs) in
+  let anka_result = anka.publish_envelope(anka_client, envelope) in
+  { envelope: envelope, anka_result: anka_result }
+}
+
+fn query_tx(anka_client, run_id) {
+  let subject = str.concat(["fd:tx:", run_id]) in
+  anka.query(anka_client, jur.FARD_DINAR_TX_V1, subject)
+}
+
+fn query_deposit(anka_client, run_id) {
+  let subject = str.concat(["fd:tx:", run_id]) in
+  anka.query(anka_client, jur.FARD_DINAR_DEPOSIT_V1, subject)
+}
+
+fn audit_tx(anka_client, envelope) {
+  anka.audit_trail(anka_client, envelope.digest_hex)
+}
+
+export {
+  publish_receipt, publish_state_snapshot,
+  query_tx, query_deposit, audit_tx
+}

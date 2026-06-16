@@ -1,0 +1,105 @@
+import("std/rec") as rec
+import("std/str") as str
+import("std/list") as list
+import("std/json") as json
+import("../src/kernel/kernel") as eos
+import("../src/kernel/claim") as claim
+import("../src/fard_dinar/claim") as fd_claim
+import("../src/fard_dinar/jurisdictions") as jur
+import("../src/fard_dinar/policy") as fd_policy
+
+let k = eos.new("fd-test-node")
+
+let sample_transfer = {
+  kind: "transfer",
+  from: "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+  to: "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c",
+  amount: 2000,
+  nonce: 0,
+  signature: "799f0885922b8a4f588198bbddf51bffda00c59aff355270a0275e55f119d1ddf2d40b7de58d811071686048721e3253e9dc6f057d26db3e7396366baff72704"
+}
+
+let sample_deposit = {
+  kind: "deposit",
+  oracle_id: "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+  beneficiary: "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+  usd_cents: 10000,
+  external_ref: "bank-wire-0001",
+  timestamp: 1710000000,
+  signature: "2f38cafd61e4c3b8ca3b137482f34af215a881ee11bbfb08376f8d4a88c68294f03c40bd11943cb33a574337a153c35bb3c188e050df2139912aa99014f44f00"
+}
+
+let sample_receipt = {
+  run_id: "ahd1024:abc123def456abc123def456abc123def456abc123def456abc123def456abc12",
+  program_hash: "ahd1024:prog",
+  input_hash: "ahd1024:input",
+  pre_state_hash: "ahd1024:pre",
+  post_state_hash: "ahd1024:post",
+  trace_hash: "ahd1024:trace",
+  transfer_effects: { amount: 2000, user_reward: 40, vendor_reward: 0, is_merchant: false }
+}
+
+test "transfer receipt claim_space is FARD_DINAR.TX.v1" {
+  fd_claim.receipt_claim_space(sample_transfer) == jur.FARD_DINAR_TX_V1
+}
+
+test "deposit receipt claim_space is FARD_DINAR.DEPOSIT.v1" {
+  fd_claim.receipt_claim_space(sample_deposit) == jur.FARD_DINAR_DEPOSIT_V1
+}
+
+test "receipt_subject includes run_id" {
+  let subject = fd_claim.receipt_subject(sample_receipt) in
+  str.starts_with(subject, "fd:tx:")
+}
+
+test "transfer envelope has correct claim_space" {
+  let env = fd_claim.receipt_to_envelope(k, sample_transfer, sample_receipt, 1710000000) in
+  env.claim.claim_space == jur.FARD_DINAR_TX_V1
+}
+
+test "transfer envelope predicate is transfer" {
+  let env = fd_claim.receipt_to_envelope(k, sample_transfer, sample_receipt, 1710000000) in
+  env.claim.predicate == "transfer"
+}
+
+test "deposit envelope predicate is deposit" {
+  let env = fd_claim.receipt_to_envelope(k, sample_deposit, sample_receipt, 1710000000) in
+  env.claim.predicate == "deposit"
+}
+
+test "transfer envelope object encodes amount" {
+  let env = fd_claim.receipt_to_envelope(k, sample_transfer, sample_receipt, 1710000000) in
+  let obj = json.decode(env.claim.object) in
+  obj.amount == 2000
+}
+
+test "deposit envelope object encodes usd_cents" {
+  let env = fd_claim.receipt_to_envelope(k, sample_deposit, sample_receipt, 1710000000) in
+  let obj = json.decode(env.claim.object) in
+  obj.usd_cents == 10000
+}
+
+test "envelope digest starts with sha256:" {
+  let env = fd_claim.receipt_to_envelope(k, sample_transfer, sample_receipt, 1710000000) in
+  str.starts_with(env.digest_hex, "sha256:")
+}
+
+test "envelope verifies with issuer public key" {
+  let env = fd_claim.receipt_to_envelope(k, sample_transfer, sample_receipt, 1710000000) in
+  claim.verify(env, k.keypair.public_key_hex).accepted == true
+}
+
+test "evidence_refs contains run_id and trace_hash" {
+  let env = fd_claim.receipt_to_envelope(k, sample_transfer, sample_receipt, 1710000000) in
+  list.len(env.claim.evidence_refs) == 2
+}
+
+test "state snapshot envelope has correct claim_space" {
+  let env = fd_claim.state_snapshot_to_envelope(k, sample_receipt.post_state_hash, 42, 1710000000) in
+  env.claim.claim_space == jur.FARD_DINAR_STATE_V1
+}
+
+test "state snapshot subject encodes block height" {
+  let env = fd_claim.state_snapshot_to_envelope(k, sample_receipt.post_state_hash, 42, 1710000000) in
+  str.starts_with(env.claim.subject, "fd:state:")
+}
