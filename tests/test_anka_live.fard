@@ -1,0 +1,74 @@
+import("std/rec") as rec
+import("std/str") as str
+import("std/list") as list
+import("std/json") as json
+import("../src/kernel/kernel") as eos
+import("../src/kernel/claim") as claim
+import("../src/anka/bridge") as anka
+import("../src/anka/witness_bridge") as witness_bridge
+import("../src/policy/jurisdictions") as jur
+
+let k = eos.new("eos-live-test-node")
+let client = anka.client("http://localhost:18080")
+
+test "anka health check returns ok" {
+  let result = anka.health(client) in
+  result.ok == true
+}
+
+test "anka node_id is present" {
+  let result = anka.health(client) in
+  str.starts_with(result.data.node_id, "ed25519:")
+}
+
+test "publish FDA claim to Anka succeeds" {
+  let envelope = eos.mint_claim(
+    k, jur.FDA_US_2025, "drug:aspirin",
+    "approved", "true", [], 1700000000
+  ) in
+  let result = anka.publish_envelope(client, envelope) in
+  result.ok == true
+}
+
+test "publish Azim training receipt claim to Anka" {
+  let envelope = eos.mint_claim(
+    k, jur.AZIM_TRAIN_V1, "azim:round:16",
+    "training_step",
+    "{\"loss_before\":2.4111,\"loss_after\":2.4087,\"steps\":59200}",
+    [], 1700000001
+  ) in
+  let result = anka.publish_envelope(client, envelope) in
+  result.ok == true
+}
+
+test "publish then query claim returns result" {
+  let envelope = eos.mint_claim(
+    k, jur.ANKA_MESH_V1, "eos:integration:test",
+    "verified", "true", [], 1700000002
+  ) in
+  let pub = anka.publish_envelope(client, envelope) in
+  let query = anka.query(client, jur.ANKA_MESH_V1, "eos:integration:test") in
+  pub.ok == true && query.ok == true
+}
+
+test "audit trail returns history for published claim" {
+  let envelope = eos.mint_claim(
+    k, jur.ANKA_MESH_V1, "eos:audit:test",
+    "verified", "true", [], 1700000003
+  ) in
+  let pub = anka.publish_envelope(client, envelope) in
+  let trail = anka.audit_trail(client, envelope.digest_hex) in
+  pub.ok == true && trail.ok == true
+}
+
+test "submit structural witness to Anka succeeds" {
+  let envelope = eos.mint_claim(
+    k, jur.FDA_US_2025, "drug:ibuprofen",
+    "approved", "true", [], 1700000004
+  ) in
+  let _ = anka.publish_envelope(client, envelope) in
+  let result = witness_bridge.submit_structural(
+    client, k, envelope.digest_hex, 1700000005
+  ) in
+  result.ok == true
+}

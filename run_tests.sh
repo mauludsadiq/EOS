@@ -37,6 +37,7 @@ run_test tests/test_challenge.fard
 run_test tests/test_discover.fard
 run_test tests/test_jurisdictions.fard
 run_test tests/test_telemetryd.fard
+run_test tests/test_anka_live.fard
 
 echo ""
 echo "========================="

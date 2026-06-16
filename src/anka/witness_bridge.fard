@@ -5,6 +5,14 @@ import("../kernel/kernel") as eos
 import("../kernel/witness") as witness
 
 // witness_bridge.fard — submit eOS witness records to Anka
+//
+// Anka /witness expects:
+//   { digest_hex, witness_node_id, validation_type, timestamp_unix_secs }
+//
+// digest_hex      — the claim being witnessed
+// witness_node_id — the witnessing node's id
+// validation_type — "structural" | "semantic" | "cryptographic"
+// timestamp_unix_secs
 
 fn post(c, path, body) {
   let result = http.post(str.concat([c.base_url, path]), json.encode(body)) in
@@ -14,34 +22,34 @@ fn post(c, path, body) {
     { ok: false, reason: result.body, status: result.status }
 }
 
-// submit_witness — build and post a witness to Anka /witness
-fn submit_witness(c, k, subject, claim_envelopes, timestamp_unix_secs) {
-  let w = eos.build_witness(k, subject, claim_envelopes, timestamp_unix_secs) in
-  let result = post(c, "/witness", {
-    subject: w.subject,
-    claims: w.claims,
-    disagreement: w.disagreement,
-    timestamp_unix_secs: w.timestamp_unix_secs,
-    digest_hex: w.digest_hex,
-    signature_hex: w.signature_hex,
-    issuer_node_id: k.keypair.node_id
-  }) in
-  { witness: w, result: result }
+fn submit_witness(c, k, claim_digest_hex, validation_type, timestamp_unix_secs) {
+  post(c, "/witness", {
+    digest_hex: claim_digest_hex,
+    witness_node_id: k.keypair.node_id,
+    validation_type: validation_type,
+    timestamp_unix_secs: timestamp_unix_secs
+  })
 }
 
-fn submit_disagreement(c, k, subject, claim_envelopes, disagreement, timestamp_unix_secs) {
-  let w = eos.build_witness(k, subject, claim_envelopes, timestamp_unix_secs) in
-  let w = {...w, disagreement: disagreement} in
-  let result = post(c, "/witness", {
-    subject: w.subject,
-    claims: w.claims,
-    disagreement: w.disagreement,
-    timestamp_unix_secs: w.timestamp_unix_secs,
-    digest_hex: w.digest_hex,
-    signature_hex: w.signature_hex,
-    issuer_node_id: k.keypair.node_id
-  }) in
-  { witness: w, result: result }
+fn submit_structural(c, k, claim_digest_hex, timestamp_unix_secs) {
+  submit_witness(c, k, claim_digest_hex, "structural", timestamp_unix_secs)
 }
 
-export { submit_witness, submit_disagreement }
+fn submit_semantic(c, k, claim_digest_hex, timestamp_unix_secs) {
+  submit_witness(c, k, claim_digest_hex, "semantic", timestamp_unix_secs)
+}
+
+fn submit_cryptographic(c, k, claim_digest_hex, timestamp_unix_secs) {
+  submit_witness(c, k, claim_digest_hex, "cryptographic", timestamp_unix_secs)
+}
+
+// build_and_submit — build a local eOS witness record AND notify Anka
+fn build_and_submit(c, k, subject, claim_envelopes, validation_type, timestamp_unix_secs) {
+  let w = eos.build_witness(k, subject, claim_envelopes, timestamp_unix_secs) in
+  let results = list.map(claim_envelopes, fn(envelope) {
+    submit_witness(c, k, envelope.digest_hex, validation_type, timestamp_unix_secs)
+  }) in
+  { witness: w, results: results }
+}
+
+export { submit_witness, submit_structural, submit_semantic, submit_cryptographic, build_and_submit }
