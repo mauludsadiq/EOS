@@ -1,0 +1,89 @@
+import("std/list") as list
+import("std/str") as str
+import("../src/policy/jurisdictions") as jur
+import("../src/kernel/kernel") as eos
+import("../src/kernel/gate") as gate
+
+let k = eos.new("jur-test-node")
+
+test "FDA_US_2025 constant is correct string" {
+  jur.FDA_US_2025 == "FDA.US.2025"
+}
+
+test "AZIM_TRAIN_V1 constant is correct string" {
+  jur.AZIM_TRAIN_V1 == "AZIM.TRAIN.v1"
+}
+
+test "ALL contains all known jurisdictions" {
+  list.len(jur.ALL) == 17
+}
+
+test "is_known returns true for FDA" {
+  jur.is_known(jur.FDA_US_2025) == true
+}
+
+test "is_known returns false for unknown space" {
+  jur.is_known("UNKNOWN.XX.2025") == false
+}
+
+test "is_regulatory true for FDA" {
+  jur.is_regulatory(jur.FDA_US_2025) == true
+}
+
+test "is_regulatory false for Azim" {
+  jur.is_regulatory(jur.AZIM_TRAIN_V1) == false
+}
+
+test "is_ai true for AZIM_TRAIN_V1" {
+  jur.is_ai(jur.AZIM_TRAIN_V1) == true
+}
+
+test "is_ai false for FDA" {
+  jur.is_ai(jur.FDA_US_2025) == false
+}
+
+test "is_coordination true for ANKA_MESH_V1" {
+  jur.is_coordination(jur.ANKA_MESH_V1) == true
+}
+
+test "region_of extracts US from FDA.US.2025" {
+  jur.region_of(jur.FDA_US_2025) == "US"
+}
+
+test "region_of extracts EU from EMA.EU.2025" {
+  jur.region_of(jur.EMA_EU_2025) == "EU"
+}
+
+test "agency_of extracts FDA from FDA.US.2025" {
+  jur.agency_of(jur.FDA_US_2025) == "FDA"
+}
+
+test "agency_of extracts AZIM from AZIM.TRAIN.v1" {
+  jur.agency_of(jur.AZIM_TRAIN_V1) == "AZIM"
+}
+
+test "jurisdiction constant works in gate JurAllow policy" {
+  let claim = {
+    claim_space: jur.FDA_US_2025,
+    subject: "drug:aspirin",
+    predicate: "approved",
+    object: "true",
+    evidence_refs: [],
+    issuer_node_id: "ed25519:abc",
+    timestamp_unix_secs: 1700000000
+  } in
+  let ctx = {
+    reputation: 10,
+    now: 1702000000,
+    policy: { rules: [{op: "JurAllow", list: [jur.FDA_US_2025]}] }
+  } in
+  gate.eval_with_ctx_json(claim, ctx).ok == true
+}
+
+test "mint claim with jurisdiction constant verifies correctly" {
+  let envelope = eos.mint_claim(
+    k, jur.AZIM_TRAIN_V1, "azim:round:16",
+    "training_step", "loss:2.41", [], 1700000000
+  ) in
+  envelope.claim.claim_space == jur.AZIM_TRAIN_V1
+}

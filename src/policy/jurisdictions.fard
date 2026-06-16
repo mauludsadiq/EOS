@@ -1,0 +1,89 @@
+import("std/list") as list
+import("std/rec") as rec
+import("std/str") as str
+
+// jurisdictions.fard — named constants for known claim spaces and jurisdictions
+//
+// Use these instead of raw strings in policies, gates, and claim minting.
+// Adding a new jurisdiction here makes it available across the entire stack.
+//
+// Convention:
+//   AGENCY.REGION.YEAR   e.g. FDA.US.2025
+//   SYSTEM.DOMAIN.VER    e.g. AZIM.TRAIN.v1
+
+// --- Regulatory ---
+let FDA_US_2025      = "FDA.US.2025"
+let EMA_EU_2025      = "EMA.EU.2025"
+let MHRA_UK_2025     = "MHRA.UK.2025"
+let PMDA_JP_2025     = "PMDA.JP.2025"
+let TGA_AU_2025      = "TGA.AU.2025"
+let ANVISA_BR_2025   = "ANVISA.BR.2025"
+
+// --- AI / Training ---
+let AZIM_TRAIN_V1    = "AZIM.TRAIN.v1"
+let AZIM_EVAL_V1     = "AZIM.EVAL.v1"
+let AZIM_CODE_V1     = "AZIM.CODE.v1"
+
+// --- Coordination ---
+let ANKA_MESH_V1     = "ANKA.MESH.v1"
+let ANKA_WITNESS_V1  = "ANKA.WITNESS.v1"
+let ANKA_ORIGIN_V1   = "ANKA.ORIGIN.v1"
+
+// --- Research ---
+let NIST_US_2025     = "NIST.US.2025"
+let NIH_US_2025      = "NIH.US.2025"
+let PUBMED_GLOBAL    = "PUBMED.GLOBAL"
+
+// --- Finance ---
+let SEC_US_2025      = "SEC.US.2025"
+let FCA_UK_2025      = "FCA.UK.2025"
+
+// --- All known jurisdictions ---
+let ALL = [
+ FDA_US_2025, EMA_EU_2025, MHRA_UK_2025, PMDA_JP_2025, TGA_AU_2025, ANVISA_BR_2025,
+ AZIM_TRAIN_V1, AZIM_EVAL_V1, AZIM_CODE_V1,
+ ANKA_MESH_V1, ANKA_WITNESS_V1, ANKA_ORIGIN_V1,
+ NIST_US_2025, NIH_US_2025, PUBMED_GLOBAL,
+ SEC_US_2025, FCA_UK_2025
+]
+
+// --- Helpers ---
+
+fn is_known(claim_space) {
+ list.any(ALL, fn(j) { j == claim_space })
+}
+
+fn is_regulatory(claim_space) {
+ list.any([FDA_US_2025, EMA_EU_2025, MHRA_UK_2025, PMDA_JP_2025, TGA_AU_2025, ANVISA_BR_2025],
+   fn(j) { j == claim_space })
+}
+
+fn is_ai(claim_space) {
+ list.any([AZIM_TRAIN_V1, AZIM_EVAL_V1, AZIM_CODE_V1],
+   fn(j) { j == claim_space })
+}
+
+fn is_coordination(claim_space) {
+ list.any([ANKA_MESH_V1, ANKA_WITNESS_V1, ANKA_ORIGIN_V1],
+   fn(j) { j == claim_space })
+}
+
+fn region_of(claim_space) {
+ let parts = str.split(claim_space, ".") in
+ if list.len(parts) >= 2 then list.get(parts, 1) ?? "UNKNOWN"
+ else "UNKNOWN"
+}
+
+fn agency_of(claim_space) {
+ let parts = str.split(claim_space, ".") in
+ list.get(parts, 0) ?? "UNKNOWN"
+}
+
+export {
+ FDA_US_2025, EMA_EU_2025, MHRA_UK_2025, PMDA_JP_2025, TGA_AU_2025, ANVISA_BR_2025,
+ AZIM_TRAIN_V1, AZIM_EVAL_V1, AZIM_CODE_V1,
+ ANKA_MESH_V1, ANKA_WITNESS_V1, ANKA_ORIGIN_V1,
+ NIST_US_2025, NIH_US_2025, PUBMED_GLOBAL,
+ SEC_US_2025, FCA_UK_2025,
+ ALL, is_known, is_regulatory, is_ai, is_coordination, region_of, agency_of
+}
