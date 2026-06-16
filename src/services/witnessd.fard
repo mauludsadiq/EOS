@@ -1,0 +1,129 @@
+import("std/net") as net
+import("std/json") as json
+import("std/rec") as rec
+import("std/str") as str
+import("std/list") as list
+import("std/env") as env
+import("../kernel/kernel") as eos
+import("../kernel/witness") as witness
+import("../kernel/canonical") as canon
+import("../anka/bridge") as anka
+import("../anka/witness_bridge") as witness_bridge
+
+// witnessd.fard — HTTP service: collect, verify, and forward witness records
+//
+// POST /witness
+//   body: { subject, claims, timestamp_unix_secs, disagreement? }
+//   Builds a signed witness from this node keypair, forwards to Anka.
+//   Returns: { ok: true, digest_hex, forwarded } | { err }
+//
+// POST /witness/raw
+//   body: pre-built envelope { subject, claims, disagreement,
+//         timestamp_unix_secs, digest_hex, signature_hex, issuer_node_id }
+//   Verifies digest integrity then forwards to Anka.
+//   Returns: { ok: true, digest_hex, forwarded } | { err }
+//
+// GET /witness/pending
+//   Returns pending (unforwarded) witnesses in the local queue.
+//
+// GET /health
+//   Returns: { ok: true, service: "witnessd", node_id }
+
+let node_seed = env.get("WITNESSD_SEED") ?? "witnessd-default-node"
+let k = eos.new(node_seed)
+let anka_url = env.get("ANKA_URL") ?? "http://localhost:7600"
+let anka_client = anka.client(anka_url)
+let pending = []
+
+fn canon_digest_ok(w) {
+  let core = {
+    subject: w.subject,
+    claims: w.claims,
+    disagreement: w.disagreement,
+    timestamp_unix_secs: w.timestamp_unix_secs
+  } in
+  canon.digest_obj(core) == w.digest_hex
+}
+
+fn handle_witness_post(body) {
+  let subject = rec.getOr(body, "subject", "") in
+  let claims = rec.getOr(body, "claims", []) in
+  let ts = rec.getOr(body, "timestamp_unix_secs", 0) in
+  let disagreement = rec.getOr(body, "disagreement", null) in
+  if subject == "" then
+    { status: 400, body: json.encode({ err: "missing subject" }) }
+  else
+    let w = if disagreement == null
+      then witness.make(subject, claims, k.keypair.private_key_hex, ts)
+      else witness.make_disagreement(subject, claims, disagreement, k.keypair.private_key_hex, ts) in
+    let fwd = witness_bridge.submit_witness(anka_client, k, subject, claims, ts) in
+    let forwarded = rec.getOr(fwd.result, "ok", false) in
+    { status: 200, body: json.encode({
+        ok: true,
+        digest_hex: w.digest_hex,
+        subject: w.subject,
+        forwarded: forwarded,
+        anka_response: fwd.result
+      })
+    }
+}
+
+fn handle_witness_raw(body) {
+  if !witness.schema_valid(body) then
+    { status: 400, body: json.encode({ err: "invalid witness schema" }) }
+  else if !canon_digest_ok(body) then
+    { status: 400, body: json.encode({ err: "digest mismatch" }) }
+  else
+    let fwd_body = {
+      subject: body.subject,
+      claims: body.claims,
+      disagreement: body.disagreement,
+      timestamp_unix_secs: body.timestamp_unix_secs,
+      digest_hex: body.digest_hex,
+      signature_hex: body.signature_hex,
+      issuer_node_id: rec.getOr(body, "issuer_node_id", "unknown")
+    } in
+    let result = anka.post(anka_client, "/witness", fwd_body) in
+    let forwarded = rec.getOr(result, "ok", false) in
+    { status: 200, body: json.encode({
+        ok: true,
+        digest_hex: body.digest_hex,
+        forwarded: forwarded,
+        anka_response: result
+      })
+    }
+}
+
+fn handle(req) {
+  match req.path {
+    "/health" =>
+      { status: 200, body: json.encode({
+          ok: true,
+          service: "witnessd",
+          node_id: k.keypair.node_id,
+          anka_url: anka_url
+        })
+      },
+    "/witness" =>
+      if req.method == "POST" then
+        handle_witness_post(json.decode(req.body))
+      else
+        { status: 405, body: json.encode({ err: "method not allowed" }) },
+    "/witness/raw" =>
+      if req.method == "POST" then
+        handle_witness_raw(json.decode(req.body))
+      else
+        { status: 405, body: json.encode({ err: "method not allowed" }) },
+    "/witness/pending" =>
+      if req.method == "GET" then
+        { status: 200, body: json.encode({ ok: true, pending: pending, count: list.len(pending) }) }
+      else
+        { status: 405, body: json.encode({ err: "method not allowed" }) },
+    _ =>
+      { status: 404, body: json.encode({ err: "not found", path: req.path }) }
+  }
+}
+
+let port = int.parse(env.get("WITNESSD_PORT") ?? "7701") |> fn(r) { r.v ?? 7701 }
+
+net.serve(port, fn(req) { handle(req) })

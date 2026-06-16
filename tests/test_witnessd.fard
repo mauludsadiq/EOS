@@ -1,0 +1,69 @@
+import("std/rec") as rec
+import("std/list") as list
+import("std/str") as str
+import("std/json") as json
+import("../src/kernel/kernel") as eos
+import("../src/kernel/witness") as witness
+import("../src/kernel/keypair") as keypair
+import("../src/kernel/canonical") as canon
+
+let k = eos.new("witnessd-test-node")
+let kp2 = keypair.generate("external-issuer-seed")
+
+let sample_claims = [
+  { digest_hex: "sha256:abc123", claim_space: "FDA.US.2025", subject: "drug:aspirin" }
+]
+
+fn canon_digest_ok(w) {
+  let core = {
+    subject: w.subject,
+    claims: w.claims,
+    disagreement: w.disagreement,
+    timestamp_unix_secs: w.timestamp_unix_secs
+  } in
+  canon.digest_obj(core) == w.digest_hex
+}
+
+test "witnessd witness.make produces schema-valid record" {
+  let w = witness.make("drug:aspirin", sample_claims, k.keypair.private_key_hex, 1700000000) in
+  witness.schema_valid(w) == true
+}
+
+test "witnessd canon_digest_ok passes for fresh witness" {
+  let w = witness.make("drug:aspirin", sample_claims, k.keypair.private_key_hex, 1700000000) in
+  canon_digest_ok(w) == true
+}
+
+test "witnessd canon_digest_ok fails for tampered subject" {
+  let w = witness.make("drug:aspirin", sample_claims, k.keypair.private_key_hex, 1700000000) in
+  let bad = {...w, subject: "drug:tampered"} in
+  canon_digest_ok(bad) == false
+}
+
+test "witnessd disagreement witness schema valid" {
+  let w = witness.make_disagreement(
+    "drug:aspirin", sample_claims, "evidence incomplete",
+    k.keypair.private_key_hex, 1700000000
+  ) in
+  witness.schema_valid(w) == true && w.disagreement == "evidence incomplete"
+}
+
+test "witnessd external issuer witness verifies with correct key" {
+  let w = witness.make("subject-x", sample_claims, kp2.private_key_hex, 1700000000) in
+  witness.verify(w, kp2.public_key_hex).accepted == true
+}
+
+test "witnessd external issuer witness fails with wrong key" {
+  let w = witness.make("subject-x", sample_claims, kp2.private_key_hex, 1700000000) in
+  witness.verify(w, k.keypair.public_key_hex).accepted == false
+}
+
+test "witnessd digest_hex starts with sha256:" {
+  let w = witness.make("subject-y", sample_claims, k.keypair.private_key_hex, 1700000000) in
+  str.starts_with(w.digest_hex, "sha256:")
+}
+
+test "witnessd empty claims list is valid" {
+  let w = witness.make("subject-z", [], k.keypair.private_key_hex, 1700000000) in
+  witness.schema_valid(w) == true && canon_digest_ok(w) == true
+}
