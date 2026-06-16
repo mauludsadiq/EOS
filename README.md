@@ -13,6 +13,23 @@ Every significant system event becomes a signed, content-addressed telemetry cla
 
 ---
 
+## By the numbers
+
+   2,379 lines of FARD
+     107 tests, 0 failures
+      20 source files
+      14 test files
+       8 commits
+       1 day
+
+   Stack position:
+     EOS      2,379 lines   epistemic kernel (this repo)
+     Anka    14,506 lines   coordination mesh
+     Azim     4,694 lines   deterministic AI training
+     Total   21,579 lines   across 222 files
+
+---
+
 ## Architecture
 
    Azim (training receipts)          Anka (mesh coordination)
@@ -33,7 +50,6 @@ Every significant system event becomes a signed, content-addressed telemetry cla
             |            |            |
         gatewayd     witnessd    telemetryd
        (eval/compile) (collect)   (audit trail)
-
 
 ---
 
@@ -59,6 +75,7 @@ Every significant system event becomes a signed, content-addressed telemetry cla
                  eval(program, claim, ctx) -> { ok } | { err: "Gate denied" }
                  compile(policy_json) -> { ok: ops } | { err }
                  eval_with_ctx_json(claim, ctx_json) -> { ok } | { err }
+                 No policy in ctx = allow-all (explicit fallback, intentional for dev).
 
    witness       Build and verify independent attestations over claims.
                  make(subject, claims, private_key, timestamp) -> witness record
@@ -81,16 +98,19 @@ Every significant system event becomes a signed, content-addressed telemetry cla
                  Interoperable with Anka challenge.fard.
 
    kernel        Assembles all eight primitives into one record.
-                 new(seed) -> kernel record with keypair, k1, gossip
-                 Single entry point: mint_claim, eval_gate, build_witness,
-                 issue_challenge, respond_to_challenge, contest_claim, ...
+                 new(seed) -> kernel with keypair, k1, gossip
+                 mint_claim, eval_gate, build_witness,
+                 issue_challenge, respond_to_challenge, verify_challenge_response,
+                 contest_claim, verify_contest,
+                 pub_gossip, sub_gossip, write_blob, read_blob
 
 ---
 
 ## Policy Layer
 
    policy/compile        Compiles JSON policy files to executable op-list bytecode.
-                         Bytecode = canonical JSON { ops: [...] } — portable and inspectable.
+                         Bytecode = canonical JSON { ops: [...] }
+                         Portable, inspectable, re-evaluable without recompilation.
                          compile_json_text / compile_file / to_bytecode / from_bytecode
                          compile_file_to_bytecode(input_path, output_path)
 
@@ -129,8 +149,6 @@ Gate ops:
    Or              pop 2, push (a || b)
    Glb(n)          pop n, push conjunction of all
 
-No policy in ctx = allow-all (explicit fallback, intentional for dev).
-
 ---
 
 ## Anka Integration
@@ -142,20 +160,25 @@ No policy in ctx = allow-all (explicit fallback, intentional for dev).
                          query(client, claim_space, subject) -> collapsed answer
                          audit_trail(client, digest_hex) -> full epistemic history
 
-   anka/witness_bridge   Build and submit witness records to Anka.
-                         submit_witness(client, kernel, subject, claims, timestamp)
-                         submit_disagreement(..., disagreement)
+   anka/witness_bridge   Submit witness records to Anka /witness endpoint.
+                         submit_witness(client, kernel, claim_digest_hex, validation_type, timestamp)
+                         submit_structural / submit_semantic / submit_cryptographic
+                         build_and_submit: build local eOS witness AND notify Anka
 
    anka/discover         Capability discovery — find Anka agents by what they can do.
                          make_entry / sign_entry / verify_entry
                          register_node(client, kernel, address, institution, region, caps, spaces)
-                         by_capability(client, capability) -> agents
-                         by_institution / by_claim_space / best(client, cap, region)
+                         by_capability / by_institution / by_claim_space
+                         best(client, capability, region) -> highest-scored agent
                          Local cache: new_cache / cache_entry / lookup / refresh
 
 Anka interop: EOS claim envelopes are structurally identical to Anka claim envelopes.
 Same Ed25519 keypair format, same canonical JSON digesting, same sha256: prefix.
 An EOS node and an Anka node verify each other's signatures without any adapter.
+
+Live Anka node (localhost:18080) after integration tests:
+   claim_count:   10
+   witness_count:  1
 
 ---
 
@@ -229,25 +252,57 @@ Event kinds emitted by telemetryd:
 
 ## Test Suite
 
-   tests/test_k1.fard               4 tests   blob store
-   tests/test_claim.fard            3 tests   claim mint/verify
-   tests/test_gate.fard             7 tests   GateVM evaluation
-   tests/test_witness.fard          5 tests   witness build/verify
-   tests/test_kernel.fard           7 tests   kernel integration
-   tests/test_azim_bridge.fard      6 tests   Azim receipt claims
-   tests/test_policy_compile.fard   6 tests   policy compilation
-   tests/test_fda_policy.fard       4 tests   FDA fixture end-to-end
-   tests/test_witnessd.fard         8 tests   witnessd logic
-   tests/test_challenge.fard       10 tests   PoP + claim contest
-   tests/test_discover.fard        14 tests   capability discovery + cache
-   tests/test_jurisdictions.fard   16 tests   jurisdiction constants
-   tests/test_telemetryd.fard      10 tests   telemetry claims
-   ────────────────────────────────────────────
-   total                          100 tests   0 failures
+   tests/test_k1.fard               4 tests    41 lines   blob store
+   tests/test_claim.fard            3 tests    34 lines   claim mint/verify
+   tests/test_gate.fard             7 tests    57 lines   GateVM evaluation
+   tests/test_witness.fard          5 tests    42 lines   witness build/verify
+   tests/test_kernel.fard           7 tests    60 lines   kernel integration
+   tests/test_azim_bridge.fard      6 tests    46 lines   Azim receipt claims
+   tests/test_policy_compile.fard   6 tests    55 lines   policy compilation
+   tests/test_fda_policy.fard       4 tests    44 lines   FDA fixture end-to-end
+   tests/test_witnessd.fard         8 tests    69 lines   witnessd logic
+   tests/test_challenge.fard       10 tests    74 lines   PoP + claim contest
+   tests/test_discover.fard        14 tests   108 lines   capability discovery + cache
+   tests/test_jurisdictions.fard   16 tests    89 lines   jurisdiction constants
+   tests/test_telemetryd.fard      10 tests    71 lines   telemetry claims
+   tests/test_anka_live.fard        7 tests    74 lines   live Anka integration
+   ─────────────────────────────────────────────────────
+   total                          107 tests   970 lines   0 failures
 
 Run all tests:
 
    bash run_tests.sh
+
+Note: test_anka_live.fard requires a running Anka node on localhost:18080.
+     All other tests run fully offline.
+
+---
+
+## Line counts
+
+   src/anka/discover.fard          212
+   src/services/telemetryd.fard    206
+   src/services/witnessd.fard      129
+   src/kernel/challenge.fard       116
+   src/policy/jurisdictions.fard    89
+   src/kernel/gate.fard             89
+   src/kernel/kernel.fard           88
+   src/kernel/claim.fard            86
+   src/anka/bridge.fard             71
+   src/kernel/witness.fard          68
+   src/services/gatewayd.fard       61
+   src/anka/witness_bridge.fard     55
+   src/policy/compile.fard          46
+   src/azim/bridge.fard             39
+   src/kernel/k1.fard               41
+   src/kernel/keypair.fard          40
+   src/kernel/canonical.fard        28
+   src/kernel/gossip.fard           30
+   src/services/policyd.fard        34
+   ──────────────────────────────────
+   source total                  1,409
+   test total                      970
+   grand total                   2,379
 
 ---
 
@@ -264,10 +319,12 @@ Run all tests:
 
 ## Stack
 
-   EOS       epistemic kernel      claims, gates, witnesses, blobs, gossip, challenges
-   Anka      coordination layer    mesh, audit trail, discovery, reputation, federation
-   Azim      training layer        receipts, corpus, verification, coding agent
-   FARD      language              deterministic, receipted, self-hosting (Stage 8)
+   EOS       2,379 lines   epistemic kernel      claims, gates, witnesses, blobs, gossip, challenges
+   Anka     14,506 lines   coordination layer    mesh, audit trail, discovery, reputation, federation
+   Azim      4,694 lines   training layer        receipts, corpus, verification, coding agent
+   FARD      runtime       deterministic, receipted, self-hosting (Stage 8)
+   ──────────────────────────────────────────────────────────────────────────
+   Total    21,579 lines   across 222 files
 
 ---
 
