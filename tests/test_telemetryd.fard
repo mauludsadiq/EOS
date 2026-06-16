@@ -1,0 +1,71 @@
+import("std/rec") as rec
+import("std/str") as str
+import("std/list") as list
+import("std/json") as json
+import("../src/kernel/kernel") as eos
+import("../src/kernel/claim") as claim
+import("../src/policy/jurisdictions") as jur
+
+let k = eos.new("telemetry-test-node")
+
+// Mirror the core emit logic without SQLite/HTTP
+fn make_telemetry_claim(k, kind, subject, data, timestamp_unix_secs) {
+  let object = json.encode({kind: kind, data: data}) in
+  eos.mint_claim(k, jur.ANKA_MESH_V1, subject, "telemetry_event", object, [], timestamp_unix_secs)
+}
+
+test "telemetry claim has correct claim_space" {
+  let env = make_telemetry_claim(k, "node_start", k.keypair.node_id, {}, 1700000000) in
+  env.claim.claim_space == jur.ANKA_MESH_V1
+}
+
+test "telemetry claim predicate is telemetry_event" {
+  let env = make_telemetry_claim(k, "gate_eval", "drug:aspirin", { passed: true }, 1700000000) in
+  env.claim.predicate == "telemetry_event"
+}
+
+test "telemetry claim object encodes kind" {
+  let env = make_telemetry_claim(k, "claim_published", "drug:aspirin", { claim_space: jur.FDA_US_2025 }, 1700000000) in
+  let obj = json.decode(env.claim.object) in
+  obj.kind == "claim_published"
+}
+
+test "telemetry claim object encodes data" {
+  let data = { claim_digest_hex: "sha256:abc", claim_space: jur.FDA_US_2025 } in
+  let env = make_telemetry_claim(k, "claim_verified", "drug:aspirin", data, 1700000000) in
+  let obj = json.decode(env.claim.object) in
+  obj.data.claim_space == jur.FDA_US_2025
+}
+
+test "telemetry claim digest starts with sha256:" {
+  let env = make_telemetry_claim(k, "error", "telemetryd", { message: "test error" }, 1700000000) in
+  str.starts_with(env.digest_hex, "sha256:")
+}
+
+test "telemetry claim verifies with issuer public key" {
+  let env = make_telemetry_claim(k, "witness_built", "drug:aspirin", { witness_digest_hex: "sha256:def" }, 1700000000) in
+  claim.verify(env, k.keypair.public_key_hex).accepted == true
+}
+
+test "telemetry claim subject is the event subject" {
+  let env = make_telemetry_claim(k, "challenge_issued", "ed25519:targetnode", {}, 1700000000) in
+  env.claim.subject == "ed25519:targetnode"
+}
+
+test "two telemetry events produce distinct digests" {
+  let e1 = make_telemetry_claim(k, "gate_eval", "drug:aspirin", { passed: true }, 1700000000) in
+  let e2 = make_telemetry_claim(k, "gate_eval", "drug:aspirin", { passed: false }, 1700000001) in
+  e1.digest_hex != e2.digest_hex
+}
+
+test "telemetry node_id is in issuer_node_id" {
+  let env = make_telemetry_claim(k, "node_start", k.keypair.node_id, {}, 1700000000) in
+  env.claim.issuer_node_id == k.keypair.node_id
+}
+
+test "telemetry claim for rejected gate includes reason" {
+  let data = { claim_digest_hex: "sha256:abc", claim_space: jur.FDA_US_2025, reason: "Gate denied" } in
+  let env = make_telemetry_claim(k, "claim_rejected", "drug:aspirin", data, 1700000000) in
+  let obj = json.decode(env.claim.object) in
+  obj.data.reason == "Gate denied"
+}

@@ -1,0 +1,206 @@
+import("std/net") as net
+import("std/json") as json
+import("std/rec") as rec
+import("std/str") as str
+import("std/list") as list
+import("std/env") as env
+import("std/trace") as trace
+import("std/sqlite") as sqlite
+import("../kernel/kernel") as eos
+import("../kernel/canonical") as canon
+import("../policy/jurisdictions") as jur
+import("../anka/bridge") as anka
+
+// telemetryd.fard — emit signed trace events as eOS claims
+//
+// Every significant system event becomes a content-addressed, signed claim
+// in claim_space ANKA.MESH.v1 with predicate "telemetry_event".
+// Events are stored locally in SQLite and forwarded to the Anka mesh.
+//
+// Event kinds:
+//   "node_start"       — node came online
+//   "node_stop"        — node going offline
+//   "claim_published"  — a claim was published to the mesh
+//   "claim_verified"   — a claim passed gate evaluation
+//   "claim_rejected"   — a claim failed gate evaluation
+//   "witness_built"    — a witness record was built
+//   "challenge_issued" — a proof-of-possession challenge was sent
+//   "gate_eval"        — a policy gate was evaluated
+//   "error"            — a system error occurred
+//
+// POST /emit
+//   body: { kind, subject, data, timestamp_unix_secs }
+//   Returns: { ok: true, digest_hex, forwarded }
+//
+// GET /events
+//   Returns: all stored events as claim envelopes
+//
+// GET /events/:kind
+//   Returns: events filtered by kind
+//
+// GET /health
+
+let node_seed = env.get("TELEMETRYD_SEED") ?? "telemetryd-default-node"
+let k = eos.new(node_seed)
+let anka_url = env.get("ANKA_URL") ?? "http://localhost:7600"
+let anka_client = anka.client(anka_url)
+let db_path = env.get("TELEMETRYD_DB") ?? "out/telemetry/telemetryd.db"
+let forward_enabled = (env.get("TELEMETRYD_FORWARD") ?? "true") == "true"
+
+let db = sqlite.open(db_path)
+let _ = sqlite.exec(db, "CREATE TABLE IF NOT EXISTS events (digest TEXT PRIMARY KEY, kind TEXT, subject TEXT, envelope TEXT, timestamp INTEGER)")
+
+// --- Core emit ---
+
+fn emit_event(kind, subject, data, timestamp_unix_secs) {
+  let object = json.encode({kind: kind, data: data}) in
+  let evidence = [] in
+  let envelope = eos.mint_claim(
+    k, jur.ANKA_MESH_V1, subject, "telemetry_event", object, evidence, timestamp_unix_secs
+  ) in
+  let _ = sqlite.exec(db, str.concat([
+    "INSERT OR IGNORE INTO events (digest, kind, subject, envelope, timestamp) VALUES ('",
+    envelope.digest_hex, "','", kind, "','",
+    str.replace(subject, "'", "''"), "','",
+    str.replace(json.encode(envelope), "'", "''"), "',",
+    str.from(timestamp_unix_secs), ")"
+  ])) in
+  let _ = trace.emit({
+    kind: kind,
+    subject: subject,
+    digest_hex: envelope.digest_hex,
+    node_id: k.keypair.node_id
+  }) in
+  let forwarded = if forward_enabled then
+    let result = anka.publish_envelope(anka_client, envelope) in
+    rec.getOr(result, "ok", false)
+  else false in
+  { ok: true, digest_hex: envelope.digest_hex, kind: kind, subject: subject, forwarded: forwarded, envelope: envelope }
+}
+
+// --- Typed emitters ---
+
+fn emit_node_start(timestamp_unix_secs) {
+  emit_event("node_start", k.keypair.node_id, { node_id: k.keypair.node_id }, timestamp_unix_secs)
+}
+
+fn emit_node_stop(timestamp_unix_secs) {
+  emit_event("node_stop", k.keypair.node_id, { node_id: k.keypair.node_id }, timestamp_unix_secs)
+}
+
+fn emit_claim_published(claim_digest_hex, claim_space, subject, timestamp_unix_secs) {
+  emit_event("claim_published", subject, {
+    claim_digest_hex: claim_digest_hex,
+    claim_space: claim_space
+  }, timestamp_unix_secs)
+}
+
+fn emit_claim_verified(claim_digest_hex, claim_space, subject, timestamp_unix_secs) {
+  emit_event("claim_verified", subject, {
+    claim_digest_hex: claim_digest_hex,
+    claim_space: claim_space
+  }, timestamp_unix_secs)
+}
+
+fn emit_claim_rejected(claim_digest_hex, claim_space, subject, reason, timestamp_unix_secs) {
+  emit_event("claim_rejected", subject, {
+    claim_digest_hex: claim_digest_hex,
+    claim_space: claim_space,
+    reason: reason
+  }, timestamp_unix_secs)
+}
+
+fn emit_witness_built(witness_digest_hex, subject, timestamp_unix_secs) {
+  emit_event("witness_built", subject, {
+    witness_digest_hex: witness_digest_hex
+  }, timestamp_unix_secs)
+}
+
+fn emit_challenge_issued(nonce_digest, target_node_id, timestamp_unix_secs) {
+  emit_event("challenge_issued", target_node_id, {
+    nonce_digest: nonce_digest,
+    target_node_id: target_node_id
+  }, timestamp_unix_secs)
+}
+
+fn emit_gate_eval(claim_digest_hex, policy_digest_hex, passed, timestamp_unix_secs) {
+  emit_event("gate_eval", claim_digest_hex, {
+    claim_digest_hex: claim_digest_hex,
+    policy_digest_hex: policy_digest_hex,
+    passed: passed
+  }, timestamp_unix_secs)
+}
+
+fn emit_error(source, message, timestamp_unix_secs) {
+  emit_event("error", source, {
+    source: source,
+    message: message
+  }, timestamp_unix_secs)
+}
+
+// --- Query ---
+
+fn all_events() {
+  let rows = sqlite.query(db, "SELECT envelope FROM events ORDER BY timestamp DESC") in
+  list.map(rows, fn(r) { json.decode(r.envelope) })
+}
+
+fn events_by_kind(kind) {
+  let rows = sqlite.query(db, str.concat([
+    "SELECT envelope FROM events WHERE kind = '", kind, "' ORDER BY timestamp DESC"
+  ])) in
+  list.map(rows, fn(r) { json.decode(r.envelope) })
+}
+
+fn event_count() {
+  let rows = sqlite.query(db, "SELECT COUNT(*) as n FROM events") in
+  if list.len(rows) > 0 then rows[0].n else 0
+}
+
+// --- HTTP handler ---
+
+fn handle(req) {
+  match req.path {
+    "/health" =>
+      { status: 200, body: json.encode({
+          ok: true,
+          service: "telemetryd",
+          node_id: k.keypair.node_id,
+          event_count: event_count(),
+          anka_url: anka_url,
+          forward_enabled: forward_enabled
+        })
+      },
+    "/emit" =>
+      if req.method == "POST" then
+        let body = json.decode(req.body) in
+        let kind = rec.getOr(body, "kind", "unknown") in
+        let subject = rec.getOr(body, "subject", k.keypair.node_id) in
+        let data = rec.getOr(body, "data", {}) in
+        let ts = rec.getOr(body, "timestamp_unix_secs", 0) in
+        let result = emit_event(kind, subject, data, ts) in
+        { status: 200, body: json.encode(result) }
+      else
+        { status: 405, body: json.encode({ err: "method not allowed" }) },
+    "/events" =>
+      if req.method == "GET" then
+        { status: 200, body: json.encode({ ok: true, events: all_events(), count: event_count() }) }
+      else
+        { status: 405, body: json.encode({ err: "method not allowed" }) },
+    _ =>
+      if str.starts_with(req.path, "/events/") then
+        let kind = str.slice(req.path, 8, str.len(req.path)) in
+        let evts = events_by_kind(kind) in
+        { status: 200, body: json.encode({ ok: true, events: evts, count: list.len(evts), kind: kind }) }
+      else
+        { status: 404, body: json.encode({ err: "not found", path: req.path }) }
+  }
+}
+
+// --- Boot ---
+
+let _ = emit_node_start(0)
+
+let port = int.parse(env.get("TELEMETRYD_PORT") ?? "7702") |> fn(r) { r.v ?? 7702 }
+
+net.serve(port, fn(req) { handle(req) })
